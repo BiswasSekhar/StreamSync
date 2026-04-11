@@ -7,30 +7,49 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use crate::state::{AppState, AppEvent, EncodeProgress, HwEncoder};
 
-/// Resolve the path to ffmpeg or ffprobe.
-/// Prefers bundled binary next to the exe, falls back to system PATH.
+/// Resolve the path to ffmpeg, ffprobe, or cloudflared.
+/// Checks all known locations in priority order:
+/// 1. TAURI_RESOURCE_DIR env var (set by Tauri at runtime — works for all installs)
+/// 2. Next to the current exe (portable / MSI with dest ".")
+/// 3. resources/ subdir next to exe (dev mode)
+/// 4. System PATH
 pub fn resolve_binary(name: &str) -> String {
     #[cfg(target_os = "windows")]
     let exe = format!("{}.exe", name);
     #[cfg(not(target_os = "windows"))]
     let exe = name.to_string();
 
-    // Try next to the current exe (bundled in installer)
+    // 1. Check Tauri resource dir (set at runtime by all install targets)
+    if let Ok(resource_dir) = std::env::var("TAURI_RESOURCE_DIR") {
+        let p = std::path::PathBuf::from(&resource_dir).join(&exe);
+        if p.exists() {
+            tracing::debug!("Using TAURI_RESOURCE_DIR binary: {}", p.display());
+            return p.to_string_lossy().to_string();
+        }
+    }
+
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(dir) = exe_path.parent() {
+            // 2. Next to the exe
             let bundled = dir.join(&exe);
             if bundled.exists() {
+                tracing::debug!("Using bundled binary: {}", bundled.display());
                 return bundled.to_string_lossy().to_string();
             }
-            // Tauri dev mode: resources/ sibling to exe
-            let resources = dir.join("resources").join(&exe);
-            if resources.exists() {
-                return resources.to_string_lossy().to_string();
+
+            // 3. resources/ subdir (dev mode)
+            for subdir in &["resources", "_up_/resources", "../resources"] {
+                let p = dir.join(subdir).join(&exe);
+                if p.exists() {
+                    tracing::debug!("Using {} binary: {}", subdir, p.display());
+                    return p.to_string_lossy().to_string();
+                }
             }
         }
     }
 
-    // Fall back to system PATH
+    // 4. Fall back to system PATH
+    tracing::debug!("Using system PATH for: {}", exe);
     exe
 }
 
