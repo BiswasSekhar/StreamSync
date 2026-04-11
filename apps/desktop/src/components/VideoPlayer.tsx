@@ -1,6 +1,9 @@
 import { useRef, useEffect, useCallback } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { useSessionStore } from "../store/session";
+
+// The signaller server (Rust/axum) at :8787 serves the host's current video
+// with range requests so the browser can seek without loading the full file.
+const HOST_VIDEO_URL = "http://localhost:8787/host-video";
 
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -12,12 +15,10 @@ export function VideoPlayer() {
     const video = videoRef.current;
     if (!video || !filePath) return;
 
-    // Direct seeding mode — play the original file directly via Tauri asset protocol
-    try {
-      video.src = convertFileSrc(filePath);
-    } catch (e) {
-      console.error("Failed to set video source:", e);
-    }
+    // Point to the local video streaming endpoint — works in both dev & prod
+    // Adding a cache-buster ensures the browser re-fetches when file changes
+    video.src = `${HOST_VIDEO_URL}?t=${Date.now()}`;
+    video.load();
 
     return () => {
       if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);

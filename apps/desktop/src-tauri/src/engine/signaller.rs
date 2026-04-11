@@ -6,12 +6,13 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Query, State,
     },
-    response::Response,
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
@@ -22,18 +23,25 @@ struct PeerSender {
 }
 
 type RoomMap = Arc<Mutex<HashMap<String, Vec<PeerSender>>>>;
+pub type CurrentFilePath = Arc<RwLock<Option<String>>>;
 
 #[derive(Clone)]
 struct SignallerState {
     rooms: RoomMap,
+    current_file: CurrentFilePath,
 }
 
-pub async fn create_signalling_server(port: u16, web_dist: Option<String>) -> anyhow::Result<()> {
+pub async fn create_signalling_server(
+    port: u16,
+    web_dist: Option<String>,
+    current_file: CurrentFilePath,
+) -> anyhow::Result<()> {
     let rooms: RoomMap = Arc::new(Mutex::new(HashMap::new()));
-    let state = SignallerState { rooms };
+    let state = SignallerState { rooms, current_file };
 
     let mut router = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/host-video", get(video_stream_handler))
         .with_state(state)
         .layer(CorsLayer::permissive());
 
@@ -51,6 +59,90 @@ pub async fn create_signalling_server(port: u16, web_dist: Option<String>) -> an
     axum::serve(listener, router).await?;
 
     Ok(())
+}
+
+/// Serve the host's current video file with HTTP range request support.
+/// This lets the in-app video player seek without loading the whole file into RAM.
+async fn video_stream_handler(
+    State(state): State<SignallerState>,
+    headers: HeaderMap,
+) -> Response {
+    let file_path = {
+        let guard = state.current_file.read().await;
+        match guard.as_ref() {
+            Some(p) => p.clone(),
+            None => {
+                return (StatusCode::NOT_FOUND, "No video loaded").into_response();
+            }
+        }
+    };
+
+    let path = std::path::PathBuf::from(&file_path);
+    let metadata = match tokio::fs::metadata(&path).await {
+        Ok(m) => m,
+        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+    };
+    let file_size = metadata.len();
+
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+    let content_type = match ext.to_lowercase().as_str() {
+        "mkv" => "video/x-matroska",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "mov" => "video/quicktime",
+        "ts" => "video/mp2t",
+        _ => "video/mp4",
+    };
+
+    // Parse Range header
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).unwrap_or("");
+
+    let (start, end) = if range.starts_with("bytes=") {
+        let parts: Vec<&str> = range[6..].splitn(2, '-').collect();
+        let start = parts.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+        let end = parts.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(file_size - 1);
+        (start, end.min(file_size - 1))
+    } else {
+        (0, file_size - 1)
+    };
+
+    let chunk_size = end - start + 1;
+    let is_range_request = !range.is_empty();
+
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut file = match tokio::fs::File::open(&path).await {
+        Ok(f) => f,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Cannot open file").into_response(),
+    };
+
+    if let Err(_) = file.seek(std::io::SeekFrom::Start(start)).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Seek failed").into_response();
+    }
+
+    let mut buf = vec![0u8; chunk_size as usize];
+    if let Err(_) = file.read_exact(&mut buf).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Read failed").into_response();
+    }
+
+    let status = if is_range_request {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+
+    let mut response_headers = axum::http::HeaderMap::new();
+    response_headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+    response_headers.insert(header::CONTENT_LENGTH, chunk_size.to_string().parse().unwrap());
+    response_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+    response_headers.insert(
+        header::CONTENT_RANGE,
+        format!("bytes {}-{}/{}", start, end, file_size).parse().unwrap(),
+    );
+    // Allow the Tauri webview to load this
+    response_headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+
+    (status, response_headers, buf).into_response()
 }
 
 async fn ws_handler(
@@ -178,7 +270,6 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
         let mut rooms_lock = rooms.lock().await;
         if let Some(room) = rooms_lock.get_mut(&room_id) {
             room.retain(|p| p.id != peer_id);
-            // Notify remaining peers
             let left_msg = serde_json::json!({
                 "type": "peer-left",
                 "peerId": peer_id,
@@ -187,7 +278,6 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
             for peer in room.iter() {
                 let _ = peer.tx.send(Message::Text(left_msg.clone()));
             }
-            // Remove empty rooms
             if room.is_empty() {
                 rooms_lock.remove(&room_id);
             }

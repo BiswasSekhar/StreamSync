@@ -5,6 +5,8 @@ pub mod state;
 
 use std::sync::Arc;
 use tauri::Manager;
+use engine::signaller::CurrentFilePath;
+use tokio::sync::RwLock;
 
 use commands::{file::*, session::*, torrent::*, tunnel::*};
 
@@ -19,16 +21,20 @@ pub fn run() {
         .init();
 
     let app_state = state::AppState::new();
+    // Shared current file path — written by start_seeding_original, read by /host-video
+    let current_file: CurrentFilePath = Arc::new(RwLock::new(None));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state.clone())
+        .manage(current_file.clone())
         .setup(|app| {
             let state = app.state::<Arc<state::AppState>>();
             let _state_clone = Arc::clone(&state);
             let _app_handle = app.handle().clone();
+            let cf = app.state::<CurrentFilePath>().inner().clone();
 
             // Start signalling server on background thread
             tauri::async_runtime::spawn(async move {
@@ -39,6 +45,7 @@ pub fn run() {
                 if let Err(e) = engine::signaller::create_signalling_server(
                     8787,
                     dist_path,
+                    cf,
                 )
                 .await
                 {

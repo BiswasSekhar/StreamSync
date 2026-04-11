@@ -3,6 +3,7 @@ use tauri::State;
 
 use crate::engine::ffmpeg::{probe_video, VideoProbeResult};
 use crate::state::AppState;
+use crate::engine::signaller::CurrentFilePath;
 
 #[tauri::command]
 pub async fn probe_file(
@@ -16,8 +17,15 @@ pub async fn probe_file(
 pub async fn start_seeding_original(
     path: String,
     state: State<'_, Arc<AppState>>,
+    current_file: State<'_, CurrentFilePath>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
+    // Update shared file path so /host-video can serve it
+    {
+        let mut guard = current_file.write().await;
+        *guard = Some(path.clone());
+    }
+
     let state_clone = Arc::clone(&state);
     let file_path = std::path::PathBuf::from(path);
 
