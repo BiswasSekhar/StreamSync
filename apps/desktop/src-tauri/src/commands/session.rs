@@ -12,6 +12,11 @@ pub async fn create_room(
 ) -> Result<String, String> {
     let session_id = uuid::Uuid::new_v4().to_string();
 
+    // Kill any existing tunnel first
+    crate::engine::tunnel::stop_tunnel(&state).await;
+    // Kill any stale cloudflared from crashed sessions
+    crate::engine::tunnel::kill_existing_cloudflared();
+
     // Start tunnel with reconnect
     let state_clone = Arc::clone(&state);
     let app_clone = app_handle.clone();
@@ -53,10 +58,11 @@ pub async fn create_room(
 pub async fn close_room(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    // Stop the tunnel process
+    crate::engine::tunnel::stop_tunnel(&state).await;
+
     let mut sess = state.session.lock().await;
     *sess = None;
-    let mut tunnel = state.tunnel.lock().await;
-    *tunnel = None;
     let mut peers = state.peers.lock().await;
     peers.clear();
     Ok(())

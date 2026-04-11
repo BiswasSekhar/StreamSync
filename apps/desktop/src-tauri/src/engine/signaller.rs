@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Query, State,
@@ -61,8 +62,13 @@ pub async fn create_signalling_server(
     Ok(())
 }
 
-/// Serve the host's current video file with HTTP range request support.
-/// This lets the in-app video player seek without loading the whole file into RAM.
+// ========================================================================
+// Video streaming with proper range requests (no full-file-in-RAM)
+// ========================================================================
+
+/// Max chunk size for streaming responses (2MB)
+const STREAM_CHUNK_SIZE: u64 = 2 * 1024 * 1024;
+
 async fn video_stream_handler(
     State(state): State<SignallerState>,
     headers: HeaderMap,
@@ -80,9 +86,16 @@ async fn video_stream_handler(
     let path = std::path::PathBuf::from(&file_path);
     let metadata = match tokio::fs::metadata(&path).await {
         Ok(m) => m,
-        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(e) => {
+            tracing::error!("Video file not found: {} — {}", file_path, e);
+            return (StatusCode::NOT_FOUND, "File not found").into_response();
+        }
     };
     let file_size = metadata.len();
+
+    if file_size == 0 {
+        return (StatusCode::NOT_FOUND, "Empty file").into_response();
+    }
 
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
     let content_type = match ext.to_lowercase().as_str() {
@@ -96,42 +109,46 @@ async fn video_stream_handler(
     };
 
     // Parse Range header
-    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).unwrap_or("");
 
-    let (start, end) = if range.starts_with("bytes=") {
-        let parts: Vec<&str> = range[6..].splitn(2, '-').collect();
+    let (start, end, is_range) = if range_header.starts_with("bytes=") {
+        let range_spec = &range_header[6..];
+        let parts: Vec<&str> = range_spec.splitn(2, '-').collect();
         let start = parts.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        let end = parts.get(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(file_size - 1);
-        (start, end.min(file_size - 1))
+        let end = parts.get(1)
+            .and_then(|s| if s.is_empty() { None } else { s.parse::<u64>().ok() })
+            .unwrap_or_else(|| (start + STREAM_CHUNK_SIZE).min(file_size) - 1)
+            .min(file_size - 1);
+        (start, end, true)
     } else {
-        (0, file_size - 1)
+        // No Range header — serve as 206 with first chunk to force range mode
+        (0, STREAM_CHUNK_SIZE.min(file_size) - 1, false)
     };
 
     let chunk_size = end - start + 1;
-    let is_range_request = !range.is_empty();
 
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    // Open file and seek
+    use tokio::io::AsyncSeekExt;
     let mut file = match tokio::fs::File::open(&path).await {
         Ok(f) => f,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Cannot open file").into_response(),
+        Err(e) => {
+            tracing::error!("Cannot open video file: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Cannot open file").into_response();
+        }
     };
 
-    if let Err(_) = file.seek(std::io::SeekFrom::Start(start)).await {
+    if let Err(e) = file.seek(std::io::SeekFrom::Start(start)).await {
+        tracing::error!("Seek failed: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "Seek failed").into_response();
     }
 
-    let mut buf = vec![0u8; chunk_size as usize];
-    if let Err(_) = file.read_exact(&mut buf).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "Read failed").into_response();
-    }
+    // Stream the chunk using ReaderStream (doesn't load everything into RAM)
+    use tokio::io::AsyncReadExt;
+    let limited = file.take(chunk_size);
+    let stream = tokio_util::io::ReaderStream::new(limited);
+    let body = Body::from_stream(stream);
 
-    let status = if is_range_request {
-        StatusCode::PARTIAL_CONTENT
-    } else {
-        StatusCode::OK
-    };
-
-    let mut response_headers = axum::http::HeaderMap::new();
+    let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
     response_headers.insert(header::CONTENT_LENGTH, chunk_size.to_string().parse().unwrap());
     response_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
@@ -139,11 +156,21 @@ async fn video_stream_handler(
         header::CONTENT_RANGE,
         format!("bytes {}-{}/{}", start, end, file_size).parse().unwrap(),
     );
-    // Allow the Tauri webview to load this
     response_headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
 
-    (status, response_headers, buf).into_response()
+    // Always return 206 Partial Content so the browser knows to use range requests
+    let status = if is_range {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::PARTIAL_CONTENT // Force 206 even without Range to teach browser
+    };
+
+    (status, response_headers, body).into_response()
 }
+
+// ========================================================================
+// WebSocket signalling
+// ========================================================================
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -205,22 +232,34 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
                             continue;
                         }
 
-                        // Notify host (first peer) about new joiner
-                        if let Some(host) = room.first() {
-                            let notify = serde_json::json!({
-                                "type": "peer-joined",
-                                "peerId": peer_id,
-                                "displayName": display_name,
-                            });
-                            let _ = host.tx.send(Message::Text(notify.to_string()));
+                        // Notify ALL existing peers about new joiner
+                        let join_notify = serde_json::json!({
+                            "type": "peer-joined",
+                            "peerId": peer_id,
+                            "displayName": display_name,
+                        });
+                        for existing_peer in room.iter() {
+                            let _ = existing_peer.tx.send(Message::Text(join_notify.to_string()));
                         }
+
+                        // Tell the new joiner about existing peers
+                        let existing_list: Vec<serde_json::Value> = room.iter().map(|p| {
+                            serde_json::json!({ "peerId": p.id })
+                        }).collect();
+                        let room_info = serde_json::json!({
+                            "type": "room-joined",
+                            "roomId": room_id,
+                            "peerId": peer_id,
+                            "existingPeers": existing_list,
+                        });
+                        let _ = tx.send(Message::Text(room_info.to_string()));
 
                         room.push(PeerSender {
                             id: peer_id.clone(),
                             tx: tx.clone(),
                         });
 
-                        tracing::info!("Peer {} joined room {}", peer_id, room_id);
+                        tracing::info!("Peer {} joined room {} (total: {})", peer_id, room_id, room.len());
                     }
 
                     Some("offer") | Some("answer") | Some("ice-candidate") => {
@@ -237,6 +276,43 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
                                     let mut relayed = signal.clone();
                                     relayed["peerId"] = peer_id.clone().into();
                                     let _ = peer.tx.send(Message::Text(relayed.to_string()));
+                                } else {
+                                    tracing::warn!("Target peer {} not found in room {}", target_id, room_id);
+                                }
+                            }
+                        }
+                    }
+
+                    Some("chat") => {
+                        // Broadcast chat to all other peers in the room
+                        if let Some(room_id) = &current_room {
+                            let rooms_lock = rooms.lock().await;
+                            if let Some(room) = rooms_lock.get(room_id) {
+                                let chat_msg = serde_json::json!({
+                                    "type": "chat",
+                                    "from": signal["from"].as_str().unwrap_or("Guest"),
+                                    "text": signal["text"].as_str().unwrap_or(""),
+                                    "timestamp": signal["timestamp"],
+                                    "id": signal["id"].as_str().unwrap_or(""),
+                                });
+                                for peer in room.iter() {
+                                    if peer.id != peer_id {
+                                        let _ = peer.tx.send(Message::Text(chat_msg.to_string()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Some("sync") => {
+                        // Broadcast sync to all other peers in the room
+                        if let Some(room_id) = &current_room {
+                            let rooms_lock = rooms.lock().await;
+                            if let Some(room) = rooms_lock.get(room_id) {
+                                for peer in room.iter() {
+                                    if peer.id != peer_id {
+                                        let _ = peer.tx.send(Message::Text(text.clone()));
+                                    }
                                 }
                             }
                         }

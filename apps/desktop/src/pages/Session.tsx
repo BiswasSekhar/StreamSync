@@ -1,12 +1,82 @@
+import { useEffect, useRef, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
 import { VideoPlayer } from "../components/VideoPlayer";
 import { FacecamGrid } from "../components/FacecamGrid";
 import { ChatPanel } from "../components/ChatPanel";
 import { RoomLink } from "../components/RoomLink";
 import { PeerList } from "../components/PeerList";
+import { HostWebRTC } from "../lib/hostWebrtc";
 
 export function Session() {
-  const { peers, roomUrl, closeRoom, leaveSession } = useSessionStore();
+  const { peers, roomUrl, closeRoom, leaveSession, sessionId, showToast } = useSessionStore();
+  const hostRtcRef = useRef<HostWebRTC | null>(null);
+
+  // Initialize HostWebRTC when session starts
+  useEffect(() => {
+    if (!sessionId || !roomUrl) return;
+
+    const rtc = new HostWebRTC(
+      // onPeerJoined
+      (peerId, displayName) => {
+        useSessionStore.setState((s) => ({
+          peers: [
+            ...s.peers,
+            { id: peerId, displayName, videoPosition: 0, connected: true },
+          ],
+        }));
+        showToast(`${displayName} joined the session`, "info");
+      },
+      // onPeerLeft
+      (peerId) => {
+        useSessionStore.setState((s) => ({
+          peers: s.peers.filter((p) => p.id !== peerId),
+        }));
+      },
+      // onChat
+      (msg) => {
+        useSessionStore.setState((s) => ({
+          messages: [...s.messages, msg],
+        }));
+      },
+      // onError
+      (err) => {
+        console.error("[Session] HostWebRTC error:", err);
+        showToast(`WebRTC error: ${err}`, "error");
+      }
+    );
+
+    hostRtcRef.current = rtc;
+    rtc.connect(sessionId, useSessionStore.getState().displayName);
+
+    return () => {
+      rtc.close();
+      hostRtcRef.current = null;
+    };
+  }, [sessionId, roomUrl]);
+
+  // Listen for magnet-ready from Rust and forward to HostWebRTC
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<{ magnet: string }>("magnet-ready", ({ payload }) => {
+      const fileName = useSessionStore.getState().filePath?.split(/[\\/]/).pop() ?? "video";
+      hostRtcRef.current?.setMagnet(payload.magnet, fileName);
+      useSessionStore.setState({ magnetLink: payload.magnet });
+    }).then((fn) => { unlisten = fn; });
+
+    return () => { unlisten?.(); };
+  }, []);
+
+  // Forward sync state from VideoPlayer to all peers
+  useEffect(() => {
+    const unsub = useSessionStore.subscribe((state, prev) => {
+      if (!hostRtcRef.current) return;
+      if (state.position !== prev.position || state.isPlaying !== prev.isPlaying) {
+        hostRtcRef.current.broadcastSync(state.position, state.isPlaying);
+      }
+    });
+    return unsub;
+  }, []);
 
   return (
     <div className="session-root">

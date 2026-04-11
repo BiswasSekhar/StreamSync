@@ -38,9 +38,9 @@ pub fn run() {
                 tracing::info!("Resource dir: {}", resource_dir.display());
             }
 
-            let state = app.state::<Arc<state::AppState>>();
-            let _state_clone = Arc::clone(&state);
-            let _app_handle = app.handle().clone();
+            // Kill any stale cloudflared from previous crashed sessions
+            engine::tunnel::kill_existing_cloudflared();
+
             let cf = app.state::<CurrentFilePath>().inner().clone();
 
             // Start signalling server on background thread
@@ -61,13 +61,12 @@ pub fn run() {
             });
 
             // Detect hardware encoders at startup
-            let state2 = app.state::<Arc<state::AppState>>();
-            let state2_clone = Arc::clone(&state2);
+            let enc_state = Arc::clone(app.state::<Arc<state::AppState>>().inner());
             tauri::async_runtime::spawn(async move {
                 match engine::ffmpeg::detect_hw_encoders().await {
                     Ok(encoders) => {
                         tracing::info!("Available encoders: {:?}", encoders);
-                        let mut enc = state2_clone.encoder.lock().await;
+                        let mut enc = enc_state.encoder.lock().await;
                         enc.available_hw = encoders.clone();
                         if let Some(best) = encoders.first() {
                             enc.selected_hw = best.clone();
