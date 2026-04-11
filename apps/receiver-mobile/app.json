@@ -1,0 +1,38 @@
+{
+  "name": "StreamSyncMobile",
+  "displayName": "StreamSync",
+  "version": "1.0",
+  "buildNumber": "1",
+  "orientation": "portrait",
+  "icon": "./assets/icon.png",
+  "userInterfaceStyle": "dark",
+  "splash": {
+    "image": "./assets/splash.png",
+    "resizeMode": "contain",
+    "backgroundColor": "#0f0f0f"
+  },
+  "ios": {
+    "supportsTablet": true,
+    "bundleIdentifier": "com.streamsync.mobile",
+    "infoPlist": {
+      "NSCameraUsageDescription": "StreamSync uses your camera for the video call feature",
+      "NSMicrophoneUsageDescription": "StreamSync uses your microphone for the video call feature",
+      "NSLocalNetworkUsageDescription": "StreamSync uses the local network for peer-to-peer streaming"
+    }
+  },
+  "android": {
+    "package": "com.streamsync.mobile",
+    "adaptiveIcon": {
+      "foregroundImage": "./assets/adaptive-icon.png",
+      "backgroundColor": "#0f0f0f"
+    },
+    "permissions": [
+      "CAMERA",
+      "RECORD_AUDIO",
+      "INTERNET",
+      "ACCESS_NETWORK_STATE",
+      "ACCESS_WIFI_STATE"
+    ]
+  },
+  "scheme": "streamsync"
+}

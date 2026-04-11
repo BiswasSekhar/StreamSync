@@ -1,0 +1,307 @@
+import { create } from "zustand";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+
+function isTauriRuntime(): boolean {
+  if (typeof window === "undefined") return false;
+  const w = window as Window & {
+    __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
+  };
+  return Boolean(w.__TAURI__ || w.__TAURI_INTERNALS__);
+}
+
+export interface EncodeProgress {
+  percent: number;
+  fps: number;
+  etaSeconds: number;
+  encoder: string;
+  outputSizeBytes: number;
+}
+
+export interface VideoProbeResult {
+  durationSeconds: number;
+  width: number;
+  height: number;
+  codecName: string;
+  containerFormat: string;
+  bitrateKbps: number;
+  fps: number;
+  hasHdr: boolean;
+  audioCodec: string;
+  needsTranscode: boolean;
+  estimatedEncodeSeconds: number;
+  fileSizeBytes: number;
+}
+
+export interface Peer {
+  id: string;
+  displayName: string;
+  videoPosition: number;
+  connected: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  from: string;
+  text: string;
+  timestamp: number;
+}
+
+interface UIState {
+  toastMessage: string | null;
+  toastType: "info" | "success" | "error" | "warning";
+}
+
+type AppView = "home" | "session";
+
+interface SessionStore {
+  // Navigation - explicit view state (not derived from sessionId)
+  view: AppView;
+  showSettings: boolean;
+
+  // File state
+  filePath: string | null;
+  probeResult: VideoProbeResult | null;
+
+  // Encode state
+  encodeProgress: EncodeProgress | null;
+  encodeComplete: boolean;
+
+  // Session
+  sessionId: string | null;
+  roomUrl: string | null;
+  magnetLink: string | null;
+
+  // Peers
+  peers: Peer[];
+
+  // Playback
+  isPlaying: boolean;
+  position: number;
+
+  // Chat
+  messages: ChatMessage[];
+  displayName: string;
+
+  // Tunnel
+  tunnelUrl: string | null;
+  tunnelConnected: boolean;
+
+  // Hardware
+  availableEncoders: string[];
+  selectedEncoder: string | null;
+
+  // UI
+  ui: UIState;
+
+  // Actions
+  setFile: (path: string) => Promise<void>;
+  createRoom: () => Promise<string>;
+  enterSession: () => void;
+  leaveSession: () => void;
+  play: () => void;
+  pause: () => void;
+  seek: (position: number) => void;
+  sendChat: (text: string) => Promise<void>;
+  setDisplayName: (name: string) => void;
+  showToast: (msg: string, type?: UIState["toastType"]) => void;
+  closeRoom: () => Promise<void>;
+  detectHardware: () => Promise<void>;
+  toggleSettings: () => void;
+}
+
+export const useSessionStore = create<SessionStore>((set, get) => ({
+  view: "home",
+  showSettings: false,
+  filePath: null,
+  probeResult: null,
+  encodeProgress: null,
+  encodeComplete: false,
+  sessionId: null,
+  roomUrl: null,
+  magnetLink: null,
+  peers: [],
+  isPlaying: false,
+  position: 0,
+  messages: [],
+  displayName: "Host",
+  tunnelUrl: null,
+  tunnelConnected: false,
+  availableEncoders: [],
+  selectedEncoder: null,
+  ui: { toastMessage: null, toastType: "info" },
+
+  setFile: async (path) => {
+    try {
+      const probe = await invoke<VideoProbeResult>("probe_file", { path });
+      set({ filePath: path, probeResult: probe, encodeComplete: false, encodeProgress: null });
+      // Auto-start encode
+      await invoke("start_encode", { path, hwOverride: null });
+    } catch (e) {
+      get().showToast(`Failed to load file: ${e}`, "error");
+    }
+  },
+
+  createRoom: async () => {
+    try {
+      const url = await invoke<string>("create_room");
+      const sessionId = new URL(url).searchParams.get("room")!;
+      // Store session info but DON'T navigate — user stays on Home to see the link
+      set({ roomUrl: url, sessionId, tunnelConnected: true });
+      get().showToast("Room created! Share the link to invite viewers.", "success");
+      return url;
+    } catch (e) {
+      get().showToast(`Failed to create room: ${e}`, "error");
+      throw e;
+    }
+  },
+
+  enterSession: () => {
+    set({ view: "session" });
+  },
+
+  leaveSession: () => {
+    set({ view: "home" });
+  },
+
+  play: () => {
+    set({ isPlaying: true });
+    invoke("send_host_sync", { position: get().position, playing: true }).catch(console.error);
+  },
+
+  pause: () => {
+    set({ isPlaying: false });
+    invoke("send_host_sync", { position: get().position, playing: false }).catch(console.error);
+  },
+
+  seek: (position) => {
+    set({ position });
+    invoke("send_host_sync", { position, playing: get().isPlaying }).catch(console.error);
+  },
+
+  sendChat: async (text) => {
+    const msg: ChatMessage = {
+      id: crypto.randomUUID(),
+      from: get().displayName,
+      text,
+      timestamp: Date.now(),
+    };
+    set((state) => ({ messages: [...state.messages, msg] }));
+    await invoke("broadcast_chat", { message: msg });
+  },
+
+  setDisplayName: (name) => set({ displayName: name }),
+
+  showToast: (msg, type = "info") => {
+    set({ ui: { toastMessage: msg, toastType: type } });
+    setTimeout(() => set({ ui: { toastMessage: null, toastType: "info" } }), 4000);
+  },
+
+  closeRoom: async () => {
+    try {
+      await invoke("close_room");
+    } catch {
+      // Ignore close errors
+    }
+    set({
+      view: "home",
+      sessionId: null,
+      roomUrl: null,
+      magnetLink: null,
+      peers: [],
+      messages: [],
+      encodeProgress: null,
+      encodeComplete: false,
+      filePath: null,
+      probeResult: null,
+      tunnelConnected: false,
+      tunnelUrl: null,
+    });
+  },
+
+  detectHardware: async () => {
+    try {
+      const encoders = await invoke<string[]>("detect_hardware");
+      set({ availableEncoders: encoders, selectedEncoder: encoders[0] ?? null });
+    } catch {
+      // silently ignore in browser dev mode
+    }
+  },
+
+  toggleSettings: () => set((s) => ({ showSettings: !s.showSettings })),
+}));
+
+export function initEventListeners() {
+  if (!isTauriRuntime()) {
+    // Avoid hard failures when running the desktop frontend in a regular browser.
+    return;
+  }
+
+  const on = <T>(event: string, handler: Parameters<typeof listen<T>>[1]) => {
+    void listen<T>(event, handler).catch((err) => {
+      console.warn(`Failed to bind Tauri event '${event}':`, err);
+    });
+  };
+
+  on<EncodeProgress>("encode-progress", ({ payload }) => {
+    useSessionStore.setState({ encodeProgress: payload });
+  });
+
+  on<void>("encode-complete", () => {
+    useSessionStore.setState({ encodeComplete: true });
+    useSessionStore.getState().showToast("Encoding complete — streaming ready", "success");
+  });
+
+  on<{ magnet: string }>("magnet-ready", ({ payload }) => {
+    useSessionStore.setState({ magnetLink: payload.magnet });
+  });
+
+  on<{ peerId: string; displayName: string }>("peer-joined", ({ payload }) => {
+    useSessionStore.setState((state) => ({
+      peers: [
+        ...state.peers,
+        {
+          id: payload.peerId,
+          displayName: payload.displayName || "Guest",
+          videoPosition: 0,
+          connected: true,
+        },
+      ],
+    }));
+    useSessionStore.getState().showToast(`${payload.displayName || "A viewer"} joined`, "info");
+  });
+
+  on<{ peerId: string }>("peer-left", ({ payload }) => {
+    useSessionStore.setState((state) => ({
+      peers: state.peers.filter((p) => p.id !== payload.peerId),
+    }));
+  });
+
+  on<ChatMessage>("chat-message", ({ payload }) => {
+    useSessionStore.setState((state) => ({
+      messages: [...state.messages, payload],
+    }));
+  });
+
+  on<{ url: string }>("tunnel-url", ({ payload }) => {
+    useSessionStore.setState({ tunnelUrl: payload.url, tunnelConnected: true });
+  });
+
+  on<void>("tunnel-disconnected", () => {
+    useSessionStore.setState({ tunnelConnected: false });
+    useSessionStore.getState().showToast("Tunnel disconnected, reconnecting...", "warning");
+  });
+
+  on<string>("tunnel-error", ({ payload }) => {
+    useSessionStore.getState().showToast(`Tunnel error: ${payload}`, "error");
+  });
+
+  on<string>("encoder-fallback", ({ payload }) => {
+    useSessionStore.getState().showToast(`Hardware encoder failed, using ${payload}`, "warning");
+  });
+
+  on<string>("encode-error", ({ payload }) => {
+    useSessionStore.getState().showToast(`Encode error: ${payload}`, "error");
+  });
+}

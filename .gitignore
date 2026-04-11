@@ -1,0 +1,27 @@
+node_modules/
+dist/
+build/
+.turbo/
+target/
+*.lock
+!pnpm-lock.yaml
+
+# Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/WixTools/
+apps/desktop/src-tauri/resources/cloudflared
+apps/desktop/src-tauri/resources/cloudflared.exe
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp

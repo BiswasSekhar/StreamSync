@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node:*)",
+      "Read(//c/Users/biswa/.claude/projects/C--Users-biswa-Downloads-StreamSync/**)",
+      "Bash(mkdir -p /c/Users/biswa/.claude/projects/C--Users-biswa-Downloads-StreamSync/memory)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files \\(x86\\)/Microsoft Visual Studio//**)",
+      "Bash(\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/Installer/vswhere.exe\" -latest -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)",
+      "Bash(rustup:*)",
+      "Bash(powershell.exe:*)",
+      "Bash(FFMPEG_DIR=\"/c/Users/biswa/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1-full_build/bin\")",
+      "Bash(RESOURCES_DIR=\"/c/Users/biswa/Downloads/StreamSync/apps/desktop/src-tauri/resources\")",
+      "Bash(__NEW_LINE_8fd7477ba5e912e9__ echo \"Copying ffmpeg.exe and ffprobe.exe to resources...\")",
+      "Bash(cp \"$FFMPEG_DIR/ffmpeg.exe\" \"$RESOURCES_DIR/ffmpeg.exe\")",
+      "Bash(cp \"$FFMPEG_DIR/ffprobe.exe\" \"$RESOURCES_DIR/ffprobe.exe\")",
+      "Read(//c/Users/biswa/Downloads/StreamSync/**)",
+      "Read(//c/tmp/**)",
+      "Bash(unzip -o ffmpeg-essentials.zip \"*/bin/ffmpeg.exe\" \"*/bin/ffprobe.exe\" -d /tmp/ffmpeg-extract)",
+      "Read(//tmp/**)",
+      "Bash(RESOURCES=\"/c/Users/biswa/Downloads/StreamSync/apps/desktop/src-tauri/resources\")",
+      "Bash(cp \"/tmp/ffmpeg-extract/ffmpeg-7.1.1-essentials_build/bin/ffmpeg.exe\" \"$RESOURCES/ffmpeg.exe\")",
+      "Bash(cp \"/tmp/ffmpeg-extract/ffmpeg-7.1.1-essentials_build/bin/ffprobe.exe\" \"$RESOURCES/ffprobe.exe\")",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm add:*)",
+      "Bash(cargo tauri:*)",
+      "Bash(cargo check:*)",
+      "Bash(xargs grep:*)",
+      "Bash(pnpm run:*)",
+      "Bash(cargo build:*)",
+      "Bash(taskkill:*)",
+      "Bash(start pnpm:*)",
+      "Bash(netstat:*)",
+      "Bash(cmd:*)"
+    ]
+  }
+}

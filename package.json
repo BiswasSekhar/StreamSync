@@ -1,0 +1,18 @@
+{
+  "name": "streamsync",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "dev:desktop": "cd apps/desktop && pnpm tauri dev",
+    "build:desktop": "cd apps/desktop && pnpm tauri build",
+    "dev:web-receiver": "cd apps/receiver-web && pnpm dev",
+    "build:web-receiver": "cd apps/receiver-web && pnpm build",
+    "prepare-resources": "node scripts/download-cloudflared.js"
+  },
+  "devDependencies": {
+    "turbo": "^1.13.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}
