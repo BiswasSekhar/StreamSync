@@ -53,7 +53,7 @@ interface UIState {
   toastType: "info" | "success" | "error" | "warning";
 }
 
-type AppView = "home" | "session";
+type AppView = "home" | "session" | "join";
 
 interface SessionStore {
   // Navigation - explicit view state (not derived from sessionId)
@@ -98,6 +98,7 @@ interface SessionStore {
   // Actions
   setFile: (path: string) => Promise<void>;
   createRoom: () => Promise<string>;
+  joinRoom: (url: string) => void;
   enterSession: () => void;
   leaveSession: () => void;
   play: () => void;
@@ -109,6 +110,9 @@ interface SessionStore {
   closeRoom: () => Promise<void>;
   detectHardware: () => Promise<void>;
   toggleSettings: () => void;
+
+  // Joiner state
+  joinRoomUrl: string | null;
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
@@ -132,22 +136,30 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   selectedEncoder: null,
   ui: { toastMessage: null, toastType: "info" },
 
+  joinRoomUrl: null,
+
   setFile: async (path) => {
     try {
       const probe = await invoke<VideoProbeResult>("probe_file", { path });
-      set({ filePath: path, probeResult: probe, encodeComplete: false, encodeProgress: null });
-      // Auto-start encode
-      await invoke("start_encode", { path, hwOverride: null });
+      // Direct seeding — no encode needed, mark ready immediately
+      set({ filePath: path, probeResult: probe, encodeComplete: true, encodeProgress: null });
     } catch (e) {
       get().showToast(`Failed to load file: ${e}`, "error");
     }
   },
 
   createRoom: async () => {
+    const { filePath } = get();
+    if (!filePath) throw new Error("No file selected");
+
     try {
+      // 1. Start seeding the original file via librqbit
+      await invoke("start_seeding_original", { path: filePath });
+
+      // 2. Start Cloudflare tunnel + get room URL
       const url = await invoke<string>("create_room");
       const sessionId = new URL(url).searchParams.get("room")!;
-      // Store session info but DON'T navigate — user stays on Home to see the link
+
       set({ roomUrl: url, sessionId, tunnelConnected: true });
       get().showToast("Room created! Share the link to invite viewers.", "success");
       return url;
@@ -157,12 +169,16 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
+  joinRoom: (url: string) => {
+    set({ joinRoomUrl: url, view: "join" });
+  },
+
   enterSession: () => {
     set({ view: "session" });
   },
 
   leaveSession: () => {
-    set({ view: "home" });
+    set({ view: "home", joinRoomUrl: null });
   },
 
   play: () => {

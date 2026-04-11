@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
-import { EncodeProgress } from "../components/EncodeProgress";
 import { RoomLink } from "../components/RoomLink";
 import { Settings } from "./Settings";
 
@@ -10,9 +9,9 @@ type HomeMode = "landing" | "host" | "join";
 
 export function Home() {
   const {
-    setFile, probeResult, filePath, encodeProgress, encodeComplete,
-    createRoom, roomUrl, sessionId, detectHardware,
-    availableEncoders, showToast, enterSession,
+    setFile, probeResult, filePath,
+    createRoom, roomUrl, sessionId, joinRoom,
+    showToast, enterSession,
     showSettings, toggleSettings,
   } = useSessionStore();
   const [mode, setMode] = useState<HomeMode>("landing");
@@ -22,7 +21,7 @@ export function Home() {
   const [joinUrl, setJoinUrl] = useState("");
 
   useEffect(() => {
-    detectHardware().catch(console.error);
+    // Hardware detection not needed in direct seeding mode
   }, []);
 
   // Tauri native drag-drop listener (HTML5 ondrop does NOT give file paths in Tauri)
@@ -108,21 +107,11 @@ export function Home() {
   const handleJoin = () => {
     const url = joinUrl.trim();
     if (!url) {
-      showToast("Please paste a room URL", "warning");
+      showToast("Please paste a room URL or room code", "warning");
       return;
     }
-    // Validate it looks like a URL
-    if (!url.startsWith("http://") && !url.startsWith("https://")) {
-      showToast("Enter the full room URL (starts with https://)", "warning");
-      return;
-    }
-    // Open in default browser via Tauri shell
-    import("@tauri-apps/plugin-shell").then(({ open: shellOpen }) => {
-      shellOpen(url);
-    }).catch(() => {
-      // Fallback — open in new tab if not in Tauri
-      window.open(url, "_blank");
-    });
+    // Join room in-app (no browser needed)
+    joinRoom(url);
   };
 
   if (showSettings) {
@@ -151,12 +140,6 @@ export function Home() {
           <span className="logo-badge">P2P</span>
         </div>
         <div className="home-header-right">
-          {availableEncoders.length > 0 && (
-            <span className="encoder-badge">
-              <span className="encoder-dot" />
-              {availableEncoders[0]}
-            </span>
-          )}
           {mode !== "landing" && (
             <button
               onClick={() => {
@@ -218,9 +201,9 @@ export function Home() {
                   </div>
                   <h2 className="mode-card-title">Join a Party</h2>
                   <p className="mode-card-desc">
-                    Paste the room URL shared by the host. Opens in your browser — no install needed.
+                    Paste the room URL or code shared by the host. Watch synchronized video right inside this app.
                   </p>
-                  <span className="mode-card-action">Paste Link →</span>
+                  <span className="mode-card-action">Join In-App →</span>
                 </button>
               </div>
 
@@ -252,7 +235,7 @@ export function Home() {
                   value={joinUrl}
                   onChange={(e) => setJoinUrl(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-                  placeholder="https://...trycloudflare.com/?room=..."
+                  placeholder="https://abc123.trycloudflare.com/?room=..."
                   className="join-input"
                   autoFocus
                 />
@@ -261,7 +244,7 @@ export function Home() {
                     <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
                     </svg>
-                    Open in Browser
+                    Join Watch Party
                   </span>
                 </button>
               </div>
@@ -359,12 +342,7 @@ export function Home() {
                 </div>
               )}
 
-              {/* Encode progress */}
-              {(encodeProgress || encodeComplete) && probeResult && (
-                <EncodeProgress />
-              )}
-
-              {/* Room link (shown after room is created — user stays on this page!) */}
+              {/* Room link (shown after room is created) */}
               {roomUrl && <RoomLink />}
 
               {/* Action buttons */}

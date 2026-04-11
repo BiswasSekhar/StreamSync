@@ -4,7 +4,7 @@ import { useSessionStore } from "../store/session";
 
 export function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { filePath, encodeComplete, play, pause, seek, encodeProgress } = useSessionStore();
+  const { filePath, play, pause, seek } = useSessionStore();
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastSyncTime = useRef(0);
 
@@ -12,28 +12,17 @@ export function VideoPlayer() {
     const video = videoRef.current;
     if (!video || !filePath) return;
 
-    // Host plays encoded output file directly via Tauri convertFileSrc
-    const loadSrc = async () => {
-      try {
-        // Build temp path (same logic as Rust get_temp_output_path)
-        const name = filePath.split(/[\\/]/).pop()!;
-        const stem = name.replace(/\.[^.]+$/, "");
-        const tempPath = await getTempDir();
-        const outputPath = `${tempPath}\\${stem}_streamsync_output.mp4`;
-        video.src = convertFileSrc(outputPath);
-      } catch (e) {
-        console.error("Failed to set video source:", e);
-        // Fallback: load the original file
-        video.src = convertFileSrc(filePath);
-      }
-    };
-
-    loadSrc();
+    // Direct seeding mode — play the original file directly via Tauri asset protocol
+    try {
+      video.src = convertFileSrc(filePath);
+    } catch (e) {
+      console.error("Failed to set video source:", e);
+    }
 
     return () => {
       if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
     };
-  }, [filePath, encodeComplete]);
+  }, [filePath]);
 
   // Periodic sync broadcast
   useEffect(() => {
@@ -70,23 +59,6 @@ export function VideoPlayer() {
     );
   }
 
-  if (encodeProgress && !encodeComplete) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-3 text-[#9ca3af]">
-        <svg className="animate-spin w-8 h-8" fill="none" viewBox="0 0 24 24">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-        </svg>
-        <span className="text-sm">
-          Encoding… {encodeProgress.percent.toFixed(0)}% ({encodeProgress.encoder})
-        </span>
-        <span className="text-xs text-[#666]">
-          Video will be playable shortly
-        </span>
-      </div>
-    );
-  }
-
   return (
     <video
       ref={videoRef}
@@ -95,18 +67,9 @@ export function VideoPlayer() {
       onSeeked={handleSeeked}
       onTimeUpdate={handleTimeUpdate}
       controls
-      className="max-w-full max-h-full"
-      style={{ maxHeight: "calc(100vh - 260px)" }}
+      className="w-full h-full object-contain bg-black"
+      style={{ maxHeight: "calc(100vh - 180px)", borderRadius: "12px", overflow: "hidden", boxShadow: "0 20px 40px rgba(0,0,0,0.4)" }}
     />
   );
 }
 
-async function getTempDir(): Promise<string> {
-  try {
-    const { tempDir } = await import("@tauri-apps/api/path");
-    const dir = await tempDir();
-    return dir.replace(/\/$/, "");
-  } catch {
-    return "/tmp";
-  }
-}

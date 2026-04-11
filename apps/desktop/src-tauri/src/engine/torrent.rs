@@ -13,7 +13,7 @@ pub async fn start_seeding(
     state: Arc<AppState>,
     app: tauri::AppHandle,
 ) -> anyhow::Result<()> {
-    use librqbit::{Session, AddTorrent, AddTorrentOptions, CreateTorrentOptions};
+    use librqbit::{Session, SessionOptions, AddTorrent, AddTorrentOptions, CreateTorrentOptions};
     use librqbit::create_torrent;
 
     let output_dir = file_path.parent()
@@ -26,7 +26,7 @@ pub async fn start_seeding(
     let torrent_bytes = create_torrent(
         &file_path,
         CreateTorrentOptions {
-            name: Some("streamsync"),
+            name: None, // DO NOT OVERRIDE. librqbit needs to find the real file name to seed it.
             piece_length: Some(512 * 1024), // 512KB pieces
         },
     ).await
@@ -36,20 +36,28 @@ pub async fn start_seeding(
 
     tracing::info!("Torrent created, adding to session");
 
-    // Step 2: Create librqbit session and add the torrent for seeding
-    let session = Session::new(output_dir)
+    // Step 2: Create librqbit session with DHT disabled.
+    // DHT often fails inside desktop apps (port conflicts, firewall) and kills the session.
+    // We rely on WebTorrent trackers for peer discovery instead.
+    let mut opts = SessionOptions::default();
+    opts.disable_dht = true;
+    opts.disable_dht_persistence = true;
+    opts.listen_port_range = Some(6881..6889);
+
+    let session = Session::new_with_opts(output_dir, opts)
         .await
         .context("Failed to create librqbit session")?;
+
+    tracing::info!("librqbit session created, adding torrent for seeding");
 
     let add_result = session.add_torrent(
         AddTorrent::from_bytes(torrent_bytes),
         Some(AddTorrentOptions {
             only_files: None,
+            overwrite: true,
             trackers: Some(vec![
                 "udp://tracker.opentrackr.org:1337/announce".to_string(),
                 "udp://open.stealth.si:80/announce".to_string(),
-                "wss://tracker.webtorrent.dev".to_string(),
-                "wss://tracker.openwebtorrent.com".to_string(),
             ]),
             ..Default::default()
         }),
@@ -64,12 +72,15 @@ pub async fn start_seeding(
         }
     };
 
-    // Build magnet link from handle's info hash
     let info_hash = handle.info_hash();
     let hash_hex = hex::encode(info_hash.0);
+
+    let file_name = file_path.file_name().unwrap().to_string_lossy();
+    let encoded_name = urlencoding::encode(&file_name);
+
     let magnet = format!(
-        "magnet:?xt=urn:btih:{}&dn=streamsync&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=wss%3A%2F%2Ftracker.webtorrent.dev",
-        hash_hex
+        "magnet:?xt=urn:btih:{}&dn={}&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=wss%3A%2F%2Ftracker.webtorrent.dev",
+        hash_hex, encoded_name
     );
 
     tracing::info!("Torrent magnet: {}", magnet);

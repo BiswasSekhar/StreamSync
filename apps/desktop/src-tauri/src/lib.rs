@@ -12,7 +12,9 @@ pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("streamsync=debug".parse().unwrap()),
+                .add_directive("streamsync=debug".parse().unwrap())
+                .add_directive("librqbit=debug".parse().unwrap())
+                .add_directive("librqbit_core=debug".parse().unwrap()),
         )
         .init();
 
@@ -67,9 +69,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             probe_file,
-            start_encode,
-            detect_hardware,
-            get_encode_progress,
+            start_seeding_original,
             create_room,
             close_room,
             get_session_status,

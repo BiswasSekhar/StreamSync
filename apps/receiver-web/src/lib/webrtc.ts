@@ -200,6 +200,16 @@ export class ReceiverWebRTC {
     this.syncController.applySync(sync, video);
   }
 
+  sendChat(text: string) {
+    // Basic implementation: send to WS or over a stored DataChannel if we had one.
+    // For now, if the signaller WS is still open, we can send it via WS as peer-message
+    // Since we don't have chatDC explicitly stored, we'll relay via signaller.
+    // StreamSync's desktop host listens to peer WS messages too.
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ type: "chat", text }));
+    }
+  }
+
   close() {
     if (this.pingInterval) clearInterval(this.pingInterval);
     this.pc?.close();
