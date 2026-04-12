@@ -7,7 +7,7 @@ export interface SyncMessage {
 }
 
 export class SyncController {
-  private clockOffset = 0; // ms, receiver relative to host
+  private clockOffset = 0;
   private lastSyncSeq = -1;
 
   updateClockOffset(t1: number, t2: number, t3: number) {
@@ -16,35 +16,45 @@ export class SyncController {
     this.clockOffset = t2 - (t1 + oneWayDelay);
   }
 
-  applySync(sync: SyncMessage, video: HTMLVideoElement): void {
-    // Discard out-of-order messages
-    if (sync.sequence <= this.lastSyncSeq) return;
+  /**
+   * Apply a sync message to a video element.
+   * Returns true if a programmatic change was made (seek / play / pause).
+   * Callers should suppress forwarding their own control events for ~500 ms after a true return.
+   */
+  applySync(sync: SyncMessage, video: HTMLVideoElement): boolean {
+    if (sync.sequence < this.lastSyncSeq) return false;
     this.lastSyncSeq = sync.sequence;
 
     const now = Date.now();
     const elapsed = (now - sync.timestamp) / 1000;
-    const targetPosition = sync.position + elapsed + this.clockOffset / 1000;
-
+    // When paused, position isn't advancing — don't add elapsed
+    const targetPosition = sync.playing
+      ? sync.position + elapsed + this.clockOffset / 1000
+      : sync.position;
     const currentPosition = video.currentTime;
     const drift = Math.abs(currentPosition - targetPosition);
-
     const playStateMismatch = video.paused === sync.playing;
 
-    if (drift > 0.5 || playStateMismatch) {
-      if (drift > 0.5) {
+    let changed = false;
+
+    if (drift > 0.3 || playStateMismatch) {
+      if (drift > 0.3) {
         video.currentTime = Math.max(0, targetPosition);
+        changed = true;
       }
       if (sync.playing && video.paused) {
         video.play().catch(console.error);
+        changed = true;
       } else if (!sync.playing && !video.paused) {
         video.pause();
+        changed = true;
       }
     } else if (drift > 0.1) {
-      // Soft correction via playback rate
-      const behind = currentPosition < targetPosition;
-      video.playbackRate = behind ? 1.05 : 0.95;
+      video.playbackRate = currentPosition < targetPosition ? 1.08 : 0.92;
     } else {
       video.playbackRate = 1.0;
     }
+
+    return changed;
   }
 }

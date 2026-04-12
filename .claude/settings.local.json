@@ -32,7 +32,8 @@
       "Bash(taskkill:*)",
       "Bash(start pnpm:*)",
       "Bash(netstat:*)",
-      "Bash(cmd:*)"
+      "Bash(cmd:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

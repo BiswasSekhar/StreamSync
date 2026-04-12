@@ -15,6 +15,7 @@ export class JoinWebRTC {
   private pendingCandidates: any[] = [];
   private remoteSet = false;
   private chatDc: RTCDataChannel | null = null;
+  private syncDcRef: RTCDataChannel | null = null;
   private initialOfferResolved = false;
   private hostPeerId: string | null = null;
   private receivedStreamIds = new Set<string>();
@@ -148,6 +149,7 @@ export class JoinWebRTC {
       }
 
       if (dc.label === "sync") {
+        this.syncDcRef = dc;
         dc.onmessage = (ev) => {
           try { this.onSync(JSON.parse(ev.data)); } catch {}
         };
@@ -219,8 +221,14 @@ export class JoinWebRTC {
     }, 5000);
   }
 
-  applySync(sync: SyncMessage, video: HTMLVideoElement) {
-    this.syncController.applySync(sync, video);
+  applySync(sync: SyncMessage, video: HTMLVideoElement): boolean {
+    return this.syncController.applySync(sync, video);
+  }
+
+  sendPlaybackControl(action: "play" | "pause" | "seek", position: number) {
+    if (this.syncDcRef?.readyState === "open") {
+      this.syncDcRef.send(JSON.stringify({ type: "control", action, position }));
+    }
   }
 
   sendChat(text: string) {

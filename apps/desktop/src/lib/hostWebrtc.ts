@@ -54,7 +54,8 @@ export class HostWebRTC {
     private onPeerLeft: (peerId: string) => void,
     private onChat: (msg: ChatMsg) => void,
     private onError: (err: string) => void,
-    private onRemoteStream: (peerId: string, stream: MediaStream) => void = () => {}
+    private onRemoteStream: (peerId: string, stream: MediaStream) => void = () => {},
+    private onPlaybackControl: (action: "play" | "pause" | "seek", position: number, fromPeerId: string) => void = () => {}
   ) {}
 
   connect(roomId: string, displayName: string = "Host") {
@@ -198,6 +199,16 @@ export class HostWebRTC {
     const controlDc = pc.createDataChannel("control", { ordered: true });
     const syncDc = pc.createDataChannel("sync", { ordered: false, maxRetransmits: 0 });
     const chatDc = pc.createDataChannel("chat", { ordered: true });
+
+    // Receive playback controls from this peer (play / pause / seek)
+    syncDc.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "control") {
+          this.onPlaybackControl(msg.action, msg.position ?? 0, peerId);
+        }
+      } catch {}
+    };
 
     const peerChannels: PeerChannels = {
       pc, controlDc, syncDc, chatDc,

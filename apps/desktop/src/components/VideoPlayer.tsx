@@ -1,45 +1,45 @@
 import { useRef, useEffect, useCallback } from "react";
 import { useSessionStore } from "../store/session";
 
-// The signaller server (Rust/axum) at :8787 serves the host's current video
-// with range requests so the browser can seek without loading the full file.
 const HOST_VIDEO_URL = "http://localhost:8787/host-video";
 
-export function VideoPlayer() {
+interface Props {
+  onVideoRef?: (el: HTMLVideoElement | null) => void;
+  onHeartbeat?: (position: number, playing: boolean) => void;
+}
+
+export function VideoPlayer({ onVideoRef, onHeartbeat }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const { filePath, play, pause, seek } = useSessionStore();
-  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastSyncTime = useRef(0);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const onHeartbeatRef = useRef(onHeartbeat);
+  onHeartbeatRef.current = onHeartbeat;
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !filePath) return;
-
-    // Point to the local video streaming endpoint — works in both dev & prod
-    // Adding a cache-buster ensures the browser re-fetches when file changes
     video.src = `${HOST_VIDEO_URL}?t=${Date.now()}`;
     video.load();
-
-    return () => {
-      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-    };
   }, [filePath]);
 
-  // Periodic sync broadcast
+  // Expose video element to parent
   useEffect(() => {
-    if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
-    syncIntervalRef.current = setInterval(() => {
+    onVideoRef?.(videoRef.current);
+    return () => { onVideoRef?.(null); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Heartbeat: broadcast every 1s regardless of play/pause state
+  useEffect(() => {
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+    heartbeatRef.current = setInterval(() => {
       const video = videoRef.current;
-      if (video && !video.paused) {
-        const now = Date.now();
-        if (now - lastSyncTime.current >= 2000) {
-          lastSyncTime.current = now;
-          useSessionStore.getState().seek(video.currentTime);
-        }
+      if (video) {
+        onHeartbeatRef.current?.(video.currentTime, !video.paused);
       }
-    }, 500);
+    }, 1000);
     return () => {
-      if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
     };
   }, []);
 
@@ -54,7 +54,7 @@ export function VideoPlayer() {
 
   if (!filePath) {
     return (
-      <div className="flex items-center justify-center text-[#9ca3af] text-sm">
+      <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 15 }}>
         No video loaded
       </div>
     );
@@ -68,9 +68,7 @@ export function VideoPlayer() {
       onSeeked={handleSeeked}
       onTimeUpdate={handleTimeUpdate}
       controls
-      className="w-full h-full object-contain bg-black"
-      style={{ maxHeight: "calc(100vh - 180px)", borderRadius: "12px", overflow: "hidden", boxShadow: "0 20px 40px rgba(0,0,0,0.4)" }}
+      style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
     />
   );
 }
-
