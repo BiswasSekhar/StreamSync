@@ -4,9 +4,11 @@
  * The host connects to ws://localhost:8787/ws (the local signaller),
  * joins its own room, and when joiners appear, creates RTCPeerConnection
  * offers, exchanges ICE candidates, and opens data channels for:
- *   - control: sends magnet link to joiner
+ *   - control: sends magnet link + video URL to joiner
  *   - sync: sends play/pause/seek state
  *   - chat: bidirectional chat
+ *
+ * Also handles video/audio transceivers for camera feeds.
  */
 
 export interface SyncState {
@@ -38,6 +40,8 @@ export class HostWebRTC {
   private peers = new Map<string, PeerChannels>();
   private magnetLink: string | null = null;
   private fileName: string = "";
+  private videoUrl: string = "";
+  private localStream: MediaStream | null = null;
   private syncSeq = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -45,13 +49,12 @@ export class HostWebRTC {
     private onPeerJoined: (peerId: string, displayName: string) => void,
     private onPeerLeft: (peerId: string) => void,
     private onChat: (msg: ChatMsg) => void,
-    private onError: (err: string) => void
+    private onError: (err: string) => void,
+    private onRemoteStream: (peerId: string, stream: MediaStream) => void = () => {}
   ) {}
 
   /**
    * Connect to the local signaller and join the room.
-   * @param roomId The room UUID (from the room URL)
-   * @param displayName The host's display name
    */
   connect(roomId: string, displayName: string = "Host") {
     const wsUrl = "ws://localhost:8787/ws";
@@ -89,15 +92,46 @@ export class HostWebRTC {
   }
 
   /**
-   * Set the magnet link. Will be sent to all existing and future peers.
+   * Set the magnet link and video URL. Will be sent to all existing and future peers.
+   * @param videoUrl  Direct HTTP URL to the host's video file (range-request capable)
    */
-  setMagnet(magnet: string, fileName: string) {
+  setMagnet(magnet: string, fileName: string, videoUrl: string = "") {
     this.magnetLink = magnet;
     this.fileName = fileName;
+    this.videoUrl = videoUrl;
 
     // Send to all currently connected peers
     for (const [, peer] of this.peers) {
       this.sendMagnetToPeer(peer);
+    }
+  }
+
+  /**
+   * Set/update the local camera stream. Adds tracks to all active peer connections.
+   * Call this whenever the host starts or stops the camera.
+   */
+  setLocalStream(stream: MediaStream | null) {
+    this.localStream = stream;
+
+    for (const [, peer] of this.peers) {
+      const senders = peer.pc.getSenders();
+
+      if (!stream) {
+        // Remove all media senders
+        senders.forEach((s) => {
+          if (s.track) peer.pc.removeTrack(s);
+        });
+        return;
+      }
+
+      stream.getTracks().forEach((track) => {
+        const existingSender = senders.find((s) => s.track?.kind === track.kind);
+        if (existingSender) {
+          existingSender.replaceTrack(track).catch(console.error);
+        } else {
+          peer.pc.addTrack(track, stream);
+        }
+      });
     }
   }
 
@@ -133,19 +167,13 @@ export class HostWebRTC {
     }
   }
 
-  /**
-   * Get the number of connected peers.
-   */
   get peerCount(): number {
     return this.peers.size;
   }
 
-  /**
-   * Close all connections.
-   */
   close() {
     if (this.pingInterval) clearInterval(this.pingInterval);
-    for (const [id, peer] of this.peers) {
+    for (const [, peer] of this.peers) {
       peer.pc.close();
     }
     this.peers.clear();
@@ -192,7 +220,6 @@ export class HostWebRTC {
         break;
 
       case "pong":
-        // Clock sync — could be used for latency estimation
         break;
 
       default:
@@ -208,6 +235,18 @@ export class HostWebRTC {
       ],
     });
 
+    // Add video+audio transceivers BEFORE the offer so the SDP includes media sections.
+    // This is required for the receiver to be able to send/receive camera streams.
+    pc.addTransceiver("video", { direction: "sendrecv" });
+    pc.addTransceiver("audio", { direction: "sendrecv" });
+
+    // If we already have a local camera stream, add its tracks now
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((track) => {
+        pc.addTrack(track, this.localStream!);
+      });
+    }
+
     // Create data channels (host initiates)
     const controlDc = pc.createDataChannel("control", { ordered: true });
     const syncDc = pc.createDataChannel("sync", {
@@ -216,10 +255,17 @@ export class HostWebRTC {
     });
     const chatDc = pc.createDataChannel("chat", { ordered: true });
 
-    const peerChannels: PeerChannels = { pc, controlDc, syncDc, chatDc, remoteSet: false, pendingCandidates: [] };
+    const peerChannels: PeerChannels = {
+      pc,
+      controlDc,
+      syncDc,
+      chatDc,
+      remoteSet: false,
+      pendingCandidates: [],
+    };
     this.peers.set(peerId, peerChannels);
 
-    // When control channel opens, send magnet
+    // When control channel opens, send magnet + video URL
     controlDc.onopen = () => {
       console.log(`[HostWebRTC] Control channel open with ${peerId}`);
       this.sendMagnetToPeer(peerChannels);
@@ -231,6 +277,14 @@ export class HostWebRTC {
         const msg: ChatMsg = JSON.parse(e.data);
         this.onChat(msg);
       } catch {}
+    };
+
+    // Receive remote camera stream from peer
+    pc.ontrack = (e) => {
+      console.log(`[HostWebRTC] Received track from ${peerId}:`, e.track.kind);
+      if (e.streams && e.streams[0]) {
+        this.onRemoteStream(peerId, e.streams[0]);
+      }
     };
 
     // ICE candidates → relay to peer via signaller
@@ -249,7 +303,10 @@ export class HostWebRTC {
     // Connection state tracking
     pc.onconnectionstatechange = () => {
       console.log(`[HostWebRTC] Peer ${peerId} state: ${pc.connectionState}`);
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+      if (
+        pc.connectionState === "failed" ||
+        pc.connectionState === "disconnected"
+      ) {
         this.cleanupPeer(peerId);
         this.onPeerLeft(peerId);
       }
@@ -284,7 +341,10 @@ export class HostWebRTC {
         try {
           await peer.pc.addIceCandidate(c);
         } catch (err) {
-          console.error(`[HostWebRTC] Failed to add pending ICE candidate for ${peerId}:`, err);
+          console.error(
+            `[HostWebRTC] Failed to add pending ICE candidate for ${peerId}:`,
+            err
+          );
         }
       }
       peer.pendingCandidates = [];
@@ -315,6 +375,7 @@ export class HostWebRTC {
           type: "magnet",
           magnet: this.magnetLink,
           fileName: this.fileName,
+          videoUrl: this.videoUrl, // direct HTTP URL for streaming
         })
       );
     }

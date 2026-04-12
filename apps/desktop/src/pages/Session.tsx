@@ -1,5 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { useSessionStore } from "../store/session";
 import { VideoPlayer } from "../components/VideoPlayer";
 import { FacecamGrid } from "../components/FacecamGrid";
@@ -11,6 +10,17 @@ import { HostWebRTC } from "../lib/hostWebrtc";
 export function Session() {
   const { peers, roomUrl, closeRoom, leaveSession, sessionId, showToast } = useSessionStore();
   const hostRtcRef = useRef<HostWebRTC | null>(null);
+
+  // Remote camera streams from peers: peerId → MediaStream
+  const [peerStreams, setPeerStreams] = useState<Map<string, MediaStream>>(new Map());
+
+  const handleRemoteStream = useCallback((peerId: string, stream: MediaStream) => {
+    setPeerStreams((prev) => {
+      const next = new Map(prev);
+      next.set(peerId, stream);
+      return next;
+    });
+  }, []);
 
   // Initialize HostWebRTC when session starts
   useEffect(() => {
@@ -32,6 +42,11 @@ export function Session() {
         useSessionStore.setState((s) => ({
           peers: s.peers.filter((p) => p.id !== peerId),
         }));
+        setPeerStreams((prev) => {
+          const next = new Map(prev);
+          next.delete(peerId);
+          return next;
+        });
       },
       // onChat
       (msg) => {
@@ -43,7 +58,9 @@ export function Session() {
       (err) => {
         console.error("[Session] HostWebRTC error:", err);
         showToast(`WebRTC error: ${err}`, "error");
-      }
+      },
+      // onRemoteStream
+      handleRemoteStream
     );
 
     hostRtcRef.current = rtc;
@@ -53,21 +70,23 @@ export function Session() {
       rtc.close();
       hostRtcRef.current = null;
     };
-  }, [sessionId, roomUrl]);
+  }, [sessionId, roomUrl, handleRemoteStream]);
 
-  // Bind magnet link to HostWebRTC
+  // Bind magnet link + video URL to HostWebRTC
   const magnetLink = useSessionStore((s) => s.magnetLink);
   const filePath = useSessionStore((s) => s.filePath);
 
   useEffect(() => {
     if (magnetLink && hostRtcRef.current && roomUrl) {
       const fileName = filePath?.split(/[\\/]/).pop() ?? "video";
-      
-      const baseUrl = roomUrl.split("?")[0];
-      const wsUrl = baseUrl.endsWith("/") ? baseUrl + "host-video" : baseUrl + "/host-video";
-      const enrichedMagnet = magnetLink + `&ws=${encodeURIComponent(wsUrl)}`;
 
-      hostRtcRef.current.setMagnet(enrichedMagnet, fileName);
+      // Build the direct HTTP video URL from the tunnel URL
+      const baseUrl = roomUrl.split("?")[0];
+      const videoUrl = baseUrl.endsWith("/")
+        ? baseUrl + "host-video"
+        : baseUrl + "/host-video";
+
+      hostRtcRef.current.setMagnet(magnetLink, fileName, videoUrl);
     }
   }, [magnetLink, filePath, roomUrl]);
 
@@ -93,6 +112,11 @@ export function Session() {
       }
     });
     return unsub;
+  }, []);
+
+  // Callback: when FacecamGrid starts/stops the camera, update WebRTC
+  const handleLocalStream = useCallback((stream: MediaStream | null) => {
+    hostRtcRef.current?.setLocalStream(stream);
   }, []);
 
   return (
@@ -122,10 +146,7 @@ export function Session() {
           <button onClick={leaveSession} className="btn-ghost">
             ← Back
           </button>
-          <button
-            onClick={closeRoom}
-            className="btn-danger"
-          >
+          <button onClick={closeRoom} className="btn-danger">
             End Session
           </button>
         </div>
@@ -140,7 +161,10 @@ export function Session() {
           </div>
           {/* Facecam row */}
           <div className="facecam-row">
-            <FacecamGrid />
+            <FacecamGrid
+              onLocalStream={handleLocalStream}
+              peerStreams={peerStreams}
+            />
           </div>
         </div>
 

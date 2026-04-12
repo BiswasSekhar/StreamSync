@@ -12,17 +12,18 @@ export class ReceiverWebRTC {
   private ws: WebSocket | null = null;
   private syncController = new SyncController();
   private pingInterval: ReturnType<typeof setInterval> | null = null;
-
-  constructor(
-    private onMagnet: (magnet: string, fileName: string) => void,
-    private onSync: (sync: SyncMessage) => void,
-    private onChat: (msg: ChatMessage) => void,
-    private onPeerJoined: () => void,
-    private onDisconnected: () => void
-  ) {}
   private pendingCandidates: any[] = [];
   private remoteSet = false;
   private chatDc: RTCDataChannel | null = null;
+
+  constructor(
+    private onMagnet: (magnet: string, fileName: string, videoUrl: string) => void,
+    private onSync: (sync: SyncMessage) => void,
+    private onChat: (msg: ChatMessage) => void,
+    private onPeerJoined: () => void,
+    private onDisconnected: () => void,
+    private onRemoteStream: (stream: MediaStream) => void = () => {}
+  ) {}
 
   async connect(roomUrl: string): Promise<MediaStream | null> {
     const url = new URL(roomUrl);
@@ -86,13 +87,24 @@ export class ReceiverWebRTC {
     });
   }
 
-  private async handleOffer(sdp: string, hostPeerId: string): Promise<MediaStream | null> {
+  private async handleOffer(
+    sdp: string,
+    hostPeerId: string
+  ): Promise<MediaStream | null> {
     this.pc = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
       ],
     });
+
+    // Receive remote camera/audio from the host
+    this.pc.ontrack = (e) => {
+      console.log("[ReceiverWebRTC] Received track:", e.track.kind);
+      if (e.streams && e.streams[0]) {
+        this.onRemoteStream(e.streams[0]);
+      }
+    };
 
     // Get local camera + mic (optional — catch errors gracefully)
     let localStream: MediaStream | null = null;
@@ -117,7 +129,11 @@ export class ReceiverWebRTC {
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === "magnet") {
-              this.onMagnet(msg.magnet, msg.fileName || "video.mp4");
+              this.onMagnet(
+                msg.magnet,
+                msg.fileName || "video.mp4",
+                msg.videoUrl || ""
+              );
             }
           } catch (e) {
             console.error("Control message parse error:", e);
