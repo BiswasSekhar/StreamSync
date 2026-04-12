@@ -55,6 +55,15 @@ pub fn resolve_binary(name: &str) -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SubtitleStream {
+    pub index: usize,
+    pub language: String,
+    pub title: String,
+    pub codec_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VideoProbeResult {
     pub duration_seconds: f64,
     pub width: u32,
@@ -68,6 +77,7 @@ pub struct VideoProbeResult {
     pub needs_transcode: bool,
     pub estimated_encode_seconds: u64,
     pub file_size_bytes: u64,
+    pub subtitle_streams: Vec<SubtitleStream>,
 }
 
 /// Probe video file using ffprobe (bundled with ffmpeg)
@@ -102,6 +112,23 @@ pub async fn probe_video(path: &str) -> anyhow::Result<VideoProbeResult> {
 
     let audio_stream = streams.iter()
         .find(|s| s["codec_type"].as_str() == Some("audio"));
+
+    let mut subtitle_streams = Vec::new();
+    for s in streams.iter() {
+        if s["codec_type"].as_str() == Some("subtitle") {
+            let index = s["index"].as_u64().unwrap_or(0) as usize;
+            let codec_name = s["codec_name"].as_str().unwrap_or("unknown").to_string();
+            let tags = &s["tags"];
+            let language = tags["language"].as_str().unwrap_or("und").to_string();
+            let title = tags["title"].as_str().unwrap_or("").to_string();
+            subtitle_streams.push(SubtitleStream {
+                index,
+                language,
+                title,
+                codec_name,
+            });
+        }
+    }
 
     let format = &json["format"];
 
@@ -160,6 +187,7 @@ pub async fn probe_video(path: &str) -> anyhow::Result<VideoProbeResult> {
         needs_transcode,
         estimated_encode_seconds,
         file_size_bytes,
+        subtitle_streams,
     })
 }
 
@@ -172,6 +200,28 @@ fn parse_fps(fps_str: &str) -> f64 {
     } else {
         fps_str.parse::<f64>().unwrap_or(30.0)
     }
+}
+
+/// Extract a specific subtitle stream as WebVTT
+pub async fn extract_subtitle(path: &str, stream_index: usize) -> anyhow::Result<String> {
+    let ffmpeg = resolve_binary("ffmpeg");
+    let output = tokio::process::Command::new(&ffmpeg)
+        .args([
+            "-v", "quiet",
+            "-i", path,
+            "-map", &format!("0:{}", stream_index),
+            "-f", "webvtt",
+            "-",
+        ])
+        .output()
+        .await
+        .context("Failed to run ffmpeg for subtitle extraction")?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("ffmpeg failed to extract subtitles: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Probe available hardware encoders by attempting to use ffmpeg

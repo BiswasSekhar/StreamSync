@@ -82,6 +82,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             probe_file,
+            extract_subtitle_command,
             start_seeding_original,
             create_room,
             close_room,

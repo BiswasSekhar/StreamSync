@@ -5,6 +5,60 @@
  */
 import React, { useEffect, useState, useRef, useCallback } from "react";
 
+/* ── Global key→video map (space, arrows, M, etc.) ── */
+function useVideoKeyboard(videoEl: HTMLVideoElement | null) {
+  useEffect(() => {
+    if (!videoEl) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      switch (e.key) {
+        case " ":
+          e.preventDefault();
+          videoEl.paused ? videoEl.play().catch(() => {}) : videoEl.pause();
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          videoEl.currentTime = Math.max(0, videoEl.currentTime - 10);
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          videoEl.currentTime = Math.min(
+            isFinite(videoEl.duration) ? videoEl.duration : Infinity,
+            videoEl.currentTime + 10,
+          );
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          videoEl.volume = Math.min(1, videoEl.volume + 0.05);
+          videoEl.muted = false;
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          videoEl.volume = Math.max(0, videoEl.volume - 0.05);
+          break;
+        case "m":
+        case "M":
+          e.preventDefault();
+          videoEl.muted = !videoEl.muted;
+          break;
+        case "f":
+        case "F":
+          e.preventDefault();
+          if (document.fullscreenElement) {
+            document.exitFullscreen().catch(() => {});
+          } else {
+            videoEl.closest("div")?.requestFullscreen?.().catch(() => {});
+          }
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [videoEl]);
+}
+
 interface SubEntry { start: number; end: number; text: string; }
 
 interface Props {
@@ -12,6 +66,8 @@ interface Props {
 }
 
 export function VideoOverlay({ videoEl }: Props) {
+  useVideoKeyboard(videoEl);
+
   const [playing, setPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [time, setTime] = useState(0);
@@ -259,7 +315,7 @@ export function VideoOverlay({ videoEl }: Props) {
                     </div>
                     <div style={{ marginTop: 10 }}>
                       <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 4 }}>Size: {subSize}px</div>
-                      <input type="range" min={12} max={32} value={subSize} onChange={e => setSubSize(+e.target.value)} style={{ width: "100%", accentColor: "#6366f1" }} />
+                      <input type="range" min={12} max={48} value={subSize} onChange={e => setSubSize(+e.target.value)} style={{ width: "100%", accentColor: "#6366f1" }} />
                     </div>
                   </>
                 )}
@@ -282,26 +338,47 @@ export function VideoOverlay({ videoEl }: Props) {
 }
 
 // ── Subtitle parsers ──────────────────────────────────────────
-function parseSRT(text: string): SubEntry[] {
+function parseVTT(text: string): SubEntry[] {
   const entries: SubEntry[] = [];
-  for (const block of text.trim().split(/\n\n+/)) {
+  const body = text.replace(/^WEBVTT[^\n]*\n/, "").replace(/^NOTE[^\n]*\n[\s\S]*?\n\n/gm, "").trim();
+  if (!body) return entries;
+  
+  for (const block of body.split(/\n\n+/)) {
     const lines = block.trim().split("\n");
-    if (lines.length < 3) continue;
-    const m = lines[1].match(/(\d{2}:\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})/);
-    if (!m) continue;
-    entries.push({ start: srtMs(m[1]), end: srtMs(m[2]), text: lines.slice(2).join("\n").replace(/<[^>]+>/g, "") });
+    if (lines.length < 2) continue;
+    
+    let tsLineIdx = -1;
+    let m: RegExpMatchArray | null = null;
+    for (let i = 0; i < 2; i++) {
+      if (lines[i]) {
+        m = lines[i].match(/(?:(\d{2}):)?(\d{2}:\d{2}[,\.]\d{3})\s*-->\s*(?:(\d{2}):)?(\d{2}:\d{2}[,\.]\d{3})/);
+        if (m) {
+          tsLineIdx = i;
+          break;
+        }
+      }
+    }
+    
+    if (tsLineIdx === -1 || !m) continue;
+    
+    const parseTime = (h: string | undefined, msString: string) => {
+      const hr = h || "00";
+      const [mi, s_ms] = msString.split(":");
+      const [s, ms] = s_ms.replace(",", ".").split(".");
+      return Number(hr) * 3600 + Number(mi) * 60 + Number(s) + Number(ms) / 1000;
+    };
+    
+    const start = parseTime(m[1], m[2]);
+    const end = parseTime(m[3], m[4]);
+    const txt = lines.slice(tsLineIdx + 1).join("\n").replace(/<[^>]+>/g, "");
+    
+    entries.push({ start, end, text: txt });
   }
   return entries;
 }
-function parseVTT(text: string): SubEntry[] {
-  // Strip WEBVTT header + optional metadata, then parse like SRT
-  const body = text.replace(/^WEBVTT[^\n]*\n/, "").replace(/^NOTE[^\n]*\n[\s\S]*?\n\n/gm, "");
-  return parseSRT(body);
-}
-function srtMs(t: string): number {
-  const [hms, ms] = t.replace(",", ".").split(".");
-  const [h, mi, s] = hms.split(":").map(Number);
-  return h * 3600 + mi * 60 + s + (parseInt(ms) || 0) / 1000;
+
+function parseSRT(text: string): SubEntry[] {
+  return parseVTT(text);
 }
 function loadSubs(file: File, set: (e: SubEntry[]) => void) {
   const r = new FileReader();

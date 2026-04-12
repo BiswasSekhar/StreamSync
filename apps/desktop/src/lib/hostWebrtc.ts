@@ -59,16 +59,22 @@ export class HostWebRTC {
   ) {}
 
   connect(roomId: string, displayName: string = "Host") {
-    const wsUrl = "ws://localhost:8787/ws";
-    this.ws = new WebSocket(wsUrl);
+    this.connectWithRetry(roomId, displayName, 0);
+  }
 
-    this.ws.onopen = () => {
+  private connectWithRetry(roomId: string, displayName: string, attempt: number) {
+    const MAX_RETRIES = 5;
+    const wsUrl = "ws://localhost:8787/ws";
+    const ws = new WebSocket(wsUrl);
+    this.ws = ws;
+
+    ws.onopen = () => {
       console.log("[HostWebRTC] Connected to signaller");
       this.startPingLoop();
-      this.ws!.send(JSON.stringify({ type: "join", room: roomId, displayName }));
+      ws.send(JSON.stringify({ type: "join", room: roomId, displayName }));
     };
 
-    this.ws.onmessage = async (e) => {
+    ws.onmessage = async (e) => {
       try {
         const msg = JSON.parse(e.data);
         await this.handleSignal(msg);
@@ -77,8 +83,16 @@ export class HostWebRTC {
       }
     };
 
-    this.ws.onerror = () => this.onError("WebSocket connection failed");
-    this.ws.onclose = () => console.log("[HostWebRTC] WebSocket closed");
+    ws.onerror = () => {
+      if (attempt < MAX_RETRIES) {
+        const delay = Math.min(1000 * Math.pow(2, attempt), 8000);
+        console.warn(`[HostWebRTC] WebSocket failed (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${delay}ms…`);
+        setTimeout(() => this.connectWithRetry(roomId, displayName, attempt + 1), delay);
+      } else {
+        this.onError("WebSocket connection failed after retries");
+      }
+    };
+    ws.onclose = () => console.log("[HostWebRTC] WebSocket closed");
   }
 
   /**

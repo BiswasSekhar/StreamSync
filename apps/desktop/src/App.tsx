@@ -4,11 +4,14 @@ import { Session } from "./pages/Session";
 import { JoinSession } from "./pages/JoinSession";
 import { Toast } from "./components/Toast";
 
+import { EulaModal } from "./components/EulaModal";
+
 export default function App() {
   const { view } = useSessionStore();
 
   return (
     <div className="app-root">
+      <EulaModal />
       <Toast />
       {view === "session" ? <Session /> : view === "join" ? <JoinSession /> : <Home />}
     </div>

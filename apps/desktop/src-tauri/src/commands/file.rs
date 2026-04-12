@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tauri::State;
 
-use crate::engine::ffmpeg::{probe_video, VideoProbeResult};
+use crate::engine::ffmpeg::{probe_video, extract_subtitle, VideoProbeResult};
 use crate::state::AppState;
 use crate::engine::signaller::CurrentFilePath;
 
@@ -11,6 +11,14 @@ pub async fn probe_file(
     _state: State<'_, Arc<AppState>>,
 ) -> Result<VideoProbeResult, String> {
     probe_video(&path).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn extract_subtitle_command(
+    path: String,
+    stream_index: usize,
+) -> Result<String, String> {
+    extract_subtitle(&path, stream_index).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { ReceiverWebRTC } from "./lib/webrtc";
 import { startStreaming, cleanup } from "./lib/torrent";
 import { SyncMessage } from "./lib/sync";
+import { EulaModal } from "./EulaModal";
 
 type Status =
   | "connecting"
@@ -114,6 +115,7 @@ export default function App() {
   if (!roomId) {
     return (
       <div style={{ background: "#0a0a0a", minHeight: "100vh", color: "#f0f0f0", fontFamily: "Inter, system-ui, sans-serif", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <EulaModal />
         <div style={{ width: "100%", maxWidth: 560, background: "linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(255,255,255,0.01) 100%)", border: "1px solid rgba(255,255,255,0.05)", borderRadius: 16, padding: 32, display: "flex", flexDirection: "column", gap: 16, boxShadow: "0 20px 40px rgba(0,0,0,0.5)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
             <div style={{ width: 32, height: 32, background: "linear-gradient(135deg, #818cf8, #6366f1)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -175,7 +177,8 @@ export default function App() {
   }
 
   return (
-    <div style={{ background: "#0a0a0a", minHeight: "100vh", color: "#f0f0f0", fontFamily: "Inter, system-ui, sans-serif", display: "flex", flexDirection: "column" }}>
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", background: "#0a0a0a", color: "#f0f0f0", fontFamily: "Inter, system-ui, sans-serif" }}>
+      <EulaModal />
       {/* Header */}
       <div style={{ padding: "16px 24px", background: "rgba(0,0,0,0.5)", borderBottom: "1px solid rgba(255,255,255,0.05)", display: "flex", alignItems: "center", gap: "16px", backdropFilter: "blur(10px)" }}>
         <div style={{ width: 32, height: 32, background: "linear-gradient(135deg, #818cf8, #6366f1)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -237,7 +240,7 @@ export default function App() {
             <div style={{ background: "#050505", borderRadius: 12, overflow: "hidden", aspectRatio: "4/3", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.05)", boxShadow: "inset 0 2px 10px rgba(0,0,0,0.5)" }}>
               {localStream ? (
                 <video
-                  ref={localVideoRef}
+                  ref={el => { if (el && localStream && el.srcObject !== localStream) el.srcObject = localStream; }}
                   autoPlay
                   muted
                   playsInline

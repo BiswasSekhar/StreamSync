@@ -263,7 +263,7 @@ export function Session() {
     <div style={{ position: "fixed", inset: 0, background: "#000", overflow: "hidden", fontFamily: "Inter, system-ui, sans-serif" }}>
 
       {/* ── Fullscreen video ── */}
-      <div style={{ position: "absolute", inset: 0 }}>
+      <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, right: rightShift, transition: "right 0.28s ease" }}>
         <VideoPlayer onVideoRef={handleVideoRef} onHeartbeat={handleHeartbeat} />
         {videoEl && <VideoOverlay videoEl={videoEl} />}
       </div>
@@ -290,7 +290,7 @@ export function Session() {
 
               {/* Video */}
               {tile.isLocal ? (
-                <video ref={localVideoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
+                <video ref={el => { if (el && localStream && el.srcObject !== localStream) el.srcObject = localStream; }} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
               ) : (
                 <video
                   ref={el => { if (el) { peerVideoRefs.current.set(tile.id, el); const s = peerStreams.get(tile.id); if (s && el.srcObject !== s) el.srcObject = s; } }}
@@ -369,8 +369,8 @@ export function Session() {
         </div>
       </div>
 
-      {/* ── Bottom controls ── */}
-      <div style={{ position: "absolute", bottom: 0, left: 0, right: rightShift, zIndex: 20, background: "linear-gradient(to top, rgba(0,0,0,0.82), transparent)", padding: "28px 20px 14px", display: "flex", justifyContent: "flex-end", alignItems: "flex-end", gap: 10 }}>
+      {/* ── Floating action buttons (right edge, vertically centered) ── */}
+      <div style={{ position: "absolute", right: rightShift + 16, top: "50%", transform: "translateY(-50%)", zIndex: 25, display: "flex", flexDirection: "column", gap: 10 }}>
         <StripBtn onClick={() => toggleCamera()} title={cameraOn ? "Turn off camera" : "Turn on camera"} active={cameraOn}>
           <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.847v6.306a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
@@ -448,7 +448,7 @@ function TileCtrlBtn({ children, onClick, title }: { children: React.ReactNode; 
 
 function StripBtn({ children, onClick, title, active }: { children: React.ReactNode; onClick?: () => void; title?: string; active?: boolean }) {
   return (
-    <button onClick={onClick} title={title} style={{ background: active ? "rgba(99,102,241,0.9)" : "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", color: "white", borderRadius: 10, width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "background 0.2s" }}>
+    <button onClick={onClick} title={title} style={{ pointerEvents: "auto", background: active ? "rgba(99,102,241,0.9)" : "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", color: "white", borderRadius: 10, width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "background 0.2s" }}>
       {children}
     </button>
   );

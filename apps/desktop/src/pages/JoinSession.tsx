@@ -236,8 +236,8 @@ export function JoinSession() {
         </div>
       )}
 
-      {/* Video (always in DOM for ref access) */}
-      <div style={{ position: "absolute", inset: 0, display: (status === "streaming" || status === "playing") ? "block" : "none" }}>
+      {/* ── Fullscreen video ── */}
+      <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, right: chatOpen ? 340 : 0, transition: "right 0.28s ease", display: (status === "streaming" || status === "playing") ? "block" : "none" }}>
         <video
           ref={videoRef}
           onPlay={() => sendControl("play")}
@@ -270,7 +270,7 @@ export function JoinSession() {
 
               {/* Video feed */}
               {tile.isLocal ? (
-                <video ref={localVideoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
+                <video ref={el => { if (el && localStream && el.srcObject !== localStream) el.srcObject = localStream; }} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
               ) : (
                 <video
                   ref={el => { if (el && stream) { remoteVideoRefs.current.set(tile.id, el); if (el.srcObject !== stream) el.srcObject = stream; } }}
@@ -327,19 +327,22 @@ export function JoinSession() {
       })}
 
       {/* ── Top bar ── */}
-      <div style={{ position: "absolute", top: 0, left: 0, right: chatOpen ? 340 : 0, zIndex: 20, background: "linear-gradient(to bottom, rgba(0,0,0,0.88), transparent)", padding: "12px 20px", display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ width: 26, height: 26, background: "linear-gradient(135deg,#818cf8,#6366f1)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <svg width="12" height="12" fill="white" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+      <div style={{ position: "absolute", top: 0, left: 0, right: chatOpen ? 340 : 0, zIndex: 20, background: "linear-gradient(to bottom, rgba(0,0,0,0.88), transparent)", padding: "12px 20px", display: "flex", alignItems: "center", gap: 10, pointerEvents: "none" }}>
+        <div style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+          <div style={{ width: 26, height: 26, background: "linear-gradient(135deg,#818cf8,#6366f1)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <svg width="12" height="12" fill="white" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+          </div>
+          <span style={{ fontWeight: 700, fontSize: 14, color: "#f1f5f9" }}>StreamSync</span>
+          <span style={{ fontSize: 12, color: "#94a3b8" }}>{fileName}</span>
         </div>
-        <span style={{ fontWeight: 700, fontSize: 14, color: "#f1f5f9" }}>StreamSync</span>
-        <span style={{ fontSize: 12, color: "#94a3b8" }}>{fileName}</span>
-        <div style={{ flex: 1 }} />
-        <StatusBadge status={status} progress={progress} />
-        <button onClick={handleLeave} style={btnGhost}>← Leave</button>
+        <div style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <StatusBadge status={status} progress={progress} />
+          <button onClick={handleLeave} style={btnGhost}>← Leave</button>
+        </div>
       </div>
 
-      {/* ── Bottom controls ── */}
-      <div style={{ position: "absolute", bottom: 0, left: 0, right: chatOpen ? 340 : 0, zIndex: 20, background: "linear-gradient(to top, rgba(0,0,0,0.82), transparent)", padding: "28px 20px 14px", display: "flex", justifyContent: "flex-end", alignItems: "flex-end", gap: 10 }}>
+      {/* ── Floating action buttons (right edge, vertically centered) ── */}
+      <div style={{ position: "absolute", right: (chatOpen ? 340 : 0) + 16, top: "50%", transform: "translateY(-50%)", zIndex: 25, display: "flex", flexDirection: "column", gap: 10 }}>
         <StripBtn onClick={chatOpen ? closeChat : openChat} active={chatOpen} title="Chat">
           <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
         </StripBtn>
@@ -415,7 +418,7 @@ function TileCtrlBtn({ children, onClick, title }: { children: React.ReactNode; 
 }
 
 function StripBtn({ children, onClick, active, title }: { children: React.ReactNode; onClick?: () => void; active?: boolean; title?: string }) {
-  return <button onClick={onClick} title={title} style={{ background: active ? "rgba(99,102,241,0.9)" : "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", color: "white", borderRadius: 10, width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "background 0.2s" }}>{children}</button>;
+  return <button onClick={onClick} title={title} style={{ pointerEvents: "auto", background: active ? "rgba(99,102,241,0.9)" : "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", color: "white", borderRadius: 10, width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "background 0.2s" }}>{children}</button>;
 }
 
 function Spinner({ size = 20 }: { size?: number }) {

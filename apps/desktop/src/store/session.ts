@@ -19,6 +19,13 @@ export interface EncodeProgress {
   outputSizeBytes: number;
 }
 
+export interface SubtitleStream {
+  index: number;
+  language: string;
+  title: string;
+  codecName: string;
+}
+
 export interface VideoProbeResult {
   durationSeconds: number;
   width: number;
@@ -32,6 +39,7 @@ export interface VideoProbeResult {
   needsTranscode: boolean;
   estimatedEncodeSeconds: number;
   fileSizeBytes: number;
+  subtitleStreams: SubtitleStream[];
 }
 
 export interface Peer {
@@ -110,6 +118,7 @@ interface SessionStore {
   closeRoom: () => Promise<void>;
   detectHardware: () => Promise<void>;
   toggleSettings: () => void;
+  extractSubtitle: (index: number) => Promise<string>;
 
   // Joiner state
   joinRoomUrl: string | null;
@@ -243,6 +252,17 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       set({ availableEncoders: encoders, selectedEncoder: encoders[0] ?? null });
     } catch {
       // silently ignore in browser dev mode
+    }
+  },
+
+  extractSubtitle: async (index: number) => {
+    try {
+      const { filePath } = get();
+      if (!filePath) throw new Error("No file selected");
+      return await invoke<string>("extract_subtitle_command", { path: filePath, streamIndex: index });
+    } catch (e) {
+      get().showToast(`Failed to extract subtitle: ${e}`, "error");
+      throw e;
     }
   },
 
