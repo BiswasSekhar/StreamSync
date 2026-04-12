@@ -67,7 +67,6 @@ export function VideoPlayer({ onVideoRef, onHeartbeat }: Props) {
       onPause={handlePause}
       onSeeked={handleSeeked}
       onTimeUpdate={handleTimeUpdate}
-      controls
       style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
     />
   );
