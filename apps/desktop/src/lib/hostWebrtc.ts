@@ -28,6 +28,8 @@ interface PeerChannels {
   controlDc: RTCDataChannel | null;
   syncDc: RTCDataChannel | null;
   chatDc: RTCDataChannel | null;
+  remoteSet: boolean;
+  pendingCandidates: any[];
 }
 
 export class HostWebRTC {
@@ -37,6 +39,7 @@ export class HostWebRTC {
   private magnetLink: string | null = null;
   private fileName: string = "";
   private syncSeq = 0;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private onPeerJoined: (peerId: string, displayName: string) => void,
@@ -56,6 +59,7 @@ export class HostWebRTC {
 
     this.ws.onopen = () => {
       console.log("[HostWebRTC] Connected to signaller");
+      this.startPingLoop();
       this.ws!.send(
         JSON.stringify({
           type: "join",
@@ -140,6 +144,7 @@ export class HostWebRTC {
    * Close all connections.
    */
   close() {
+    if (this.pingInterval) clearInterval(this.pingInterval);
     for (const [id, peer] of this.peers) {
       peer.pc.close();
     }
@@ -149,6 +154,15 @@ export class HostWebRTC {
   }
 
   // ---- Private ----
+
+  private startPingLoop() {
+    if (this.pingInterval) return;
+    this.pingInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
+      }
+    }, 5000);
+  }
 
   private async handleSignal(msg: any) {
     switch (msg.type) {
@@ -202,7 +216,7 @@ export class HostWebRTC {
     });
     const chatDc = pc.createDataChannel("chat", { ordered: true });
 
-    const peerChannels: PeerChannels = { pc, controlDc, syncDc, chatDc };
+    const peerChannels: PeerChannels = { pc, controlDc, syncDc, chatDc, remoteSet: false, pendingCandidates: [] };
     this.peers.set(peerId, peerChannels);
 
     // When control channel opens, send magnet
@@ -265,6 +279,15 @@ export class HostWebRTC {
     try {
       await peer.pc.setRemoteDescription({ type: "answer", sdp });
       console.log(`[HostWebRTC] Set remote description for ${peerId}`);
+      peer.remoteSet = true;
+      for (const c of peer.pendingCandidates) {
+        try {
+          await peer.pc.addIceCandidate(c);
+        } catch (err) {
+          console.error(`[HostWebRTC] Failed to add pending ICE candidate for ${peerId}:`, err);
+        }
+      }
+      peer.pendingCandidates = [];
     } catch (err) {
       console.error(`[HostWebRTC] Failed to set answer for ${peerId}:`, err);
     }
@@ -273,10 +296,14 @@ export class HostWebRTC {
   private async handleIceCandidate(peerId: string, candidate: any) {
     const peer = this.peers.get(peerId);
     if (!peer) return;
-    try {
-      await peer.pc.addIceCandidate(candidate);
-    } catch (err) {
-      console.error(`[HostWebRTC] Failed to add ICE candidate:`, err);
+    if (peer.remoteSet) {
+      try {
+        await peer.pc.addIceCandidate(candidate);
+      } catch (err) {
+        console.error(`[HostWebRTC] Failed to add ICE candidate:`, err);
+      }
+    } else {
+      peer.pendingCandidates.push(candidate);
     }
   }
 

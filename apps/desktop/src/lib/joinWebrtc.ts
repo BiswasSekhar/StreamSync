@@ -21,11 +21,12 @@ export class JoinWebRTC {
     private onDisconnected: () => void
   ) {}
 
+  private pendingCandidates: any[] = [];
+  private remoteSet = false;
+
   async connect(roomUrl: string): Promise<MediaStream | null> {
-    // Support both full URL and short room code
     let fullUrl = roomUrl.trim();
     if (!fullUrl.startsWith("http")) {
-      // Assume it's a Cloudflare subdomain short code
       fullUrl = `https://${fullUrl}.trycloudflare.com`;
     }
 
@@ -39,6 +40,7 @@ export class JoinWebRTC {
 
     return new Promise((resolve) => {
       this.ws!.onopen = () => {
+        this.startPingLoop();
         this.ws!.send(
           JSON.stringify({
             type: "join",
@@ -64,11 +66,15 @@ export class JoinWebRTC {
             console.error("Failed to handle offer:", err);
             resolve(null);
           }
-        } else if (msg.type === "ice-candidate" && this.pc) {
-          try {
-            await this.pc.addIceCandidate(msg.candidate);
-          } catch (e) {
-            console.error("Failed to add ICE candidate:", e);
+        } else if (msg.type === "ice-candidate") {
+          if (this.remoteSet && this.pc) {
+            try {
+              await this.pc.addIceCandidate(msg.candidate);
+            } catch (e) {
+              console.error("Failed to add ICE candidate:", e);
+            }
+          } else {
+            this.pendingCandidates.push(msg.candidate);
           }
         } else if (msg.type === "pong") {
           const t3 = Date.now();
@@ -149,6 +155,16 @@ export class JoinWebRTC {
     };
 
     await this.pc.setRemoteDescription({ type: "offer", sdp });
+    this.remoteSet = true;
+    for (const c of this.pendingCandidates) {
+      try {
+        await this.pc.addIceCandidate(c);
+      } catch (err) {
+        console.error("Failed to add pending ICE candidate", err);
+      }
+    }
+    this.pendingCandidates = [];
+
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
 
