@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { JoinWebRTC } from "../lib/joinWebrtc";
 import { SyncMessage } from "../lib/sync";
 import { useSessionStore } from "../store/session";
@@ -8,6 +8,7 @@ type Status = "connecting" | "connected" | "streaming" | "playing" | "error" | "
 interface ChatMsg { id: string; from: string; text: string; timestamp: number; }
 interface Toast { id: string; from: string; text: string; }
 type CamShape = "circle" | "rounded" | "square";
+interface FloatPos { x: number; y: number; }
 
 export function JoinSession() {
   const { leaveSession, showToast } = useSessionStore();
@@ -25,17 +26,22 @@ export function JoinSession() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
 
-  // Camera
+  // Camera / PiP
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
   const [micMuted, setMicMuted] = useState(false);
   const [availCams, setAvailCams] = useState<MediaDeviceInfo[]>([]);
   const [selectedCamId, setSelectedCamId] = useState("");
-  const [showCamPicker, setShowCamPicker] = useState(false);
   const [camShape, setCamShape] = useState<CamShape>("rounded");
-  const [pinnedCam, setPinnedCam] = useState<string | null>(null);
-  const [showShapeMenu, setShowShapeMenu] = useState(false);
+  const [camSizes, setCamSizes] = useState<Map<string, number>>(new Map());
+  const [floatPos, setFloatPos] = useState<Map<string, FloatPos>>(new Map());
+  const [hoveredTile, setHoveredTile] = useState<string | null>(null);
+  const [showShapeMenu, setShowShapeMenu] = useState<string | null>(null);
+  const [showCamPicker, setShowCamPicker] = useState<string | null>(null);
+  const dragging = useRef<{ id: string; ox: number; oy: number } | null>(null);
+  const floatPosRef = useRef(floatPos);
+  floatPosRef.current = floatPos;
 
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const rtcRef = useRef<JoinWebRTC | null>(null);
@@ -156,28 +162,64 @@ export function JoinSession() {
       localStream?.getTracks().forEach(t => t.stop());
       setLocalStream(stream); setSelectedCamId(deviceId);
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-      setShowCamPicker(false);
+      setShowCamPicker(null);
     } catch { showToast("Camera switch failed", "error"); }
   };
 
   const handleLeave = () => { rtcRef.current?.close(); localStream?.getTracks().forEach(t => t.stop()); leaveSession(); };
 
-  const shapeRadius = camShape === "circle" ? "50%" : camShape === "rounded" ? 10 : 0;
-  const tileW = camShape === "circle" ? 84 : 136;
-  const tileH = 84;
-
-  const camTiles = [
+  const camTiles = useMemo(() => [
     ...(localStream ? [{ id: "local", label: "You", isLocal: true }] : []),
     ...remoteStreams.map((s, i) => ({ id: s.id, label: i === 0 ? "Host" : `Viewer ${i}`, isLocal: false })),
-  ];
+  ], [localStream, remoteStreams]);
+
+  // Initialize PiP positions for new tiles
+  const camTileIdStr = camTiles.map(t => t.id).join(",");
+  useEffect(() => {
+    const ids = camTileIdStr ? camTileIdStr.split(",") : [];
+    setFloatPos(prev => {
+      const n = new Map(prev);
+      let changed = false;
+      let col = n.size;
+      ids.forEach(id => {
+        if (!n.has(id)) {
+          n.set(id, { x: window.innerWidth - 196, y: 70 + col * 150 });
+          col++;
+          changed = true;
+        }
+      });
+      return changed ? n : prev;
+    });
+  }, [camTileIdStr]);
+
+  const onTileMouseDown = useCallback((id: string, e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const pos = floatPosRef.current.get(id) ?? { x: 0, y: 0 };
+    dragging.current = { id, ox: e.clientX - pos.x, oy: e.clientY - pos.y };
+    const move = (ev: MouseEvent) => {
+      if (!dragging.current || dragging.current.id !== id) return;
+      const d = dragging.current;
+      setFloatPos(prev => { const n = new Map(prev); n.set(id, { x: ev.clientX - d.ox, y: ev.clientY - d.oy }); return n; });
+    };
+    const up = () => { dragging.current = null; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }, []);
+
+  const getTileSize = (id: string) => camSizes.get(id) ?? 160;
+  const changeSize = (id: string, delta: number) => {
+    setCamSizes(prev => { const n = new Map(prev); n.set(id, Math.max(80, Math.min(320, (n.get(id) ?? 160) + delta))); return n; });
+  };
+  const shapeRadius = (s: CamShape) => s === "circle" ? "50%" : s === "rounded" ? "12px" : "4px";
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000", overflow: "hidden", fontFamily: "Inter, system-ui, sans-serif" }}>
 
-      {/* ── Video ── */}
+      {/* ── Connection states ── */}
       {(status === "connecting" || status === "connected") && (
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
-          <Spinner size={36} /><p style={{ color: "#94a3b8", fontSize: 15, margin: 0 }}>{status === "connecting" ? "Connecting..." : "Waiting for host..."}</p>
+          <Spinner size={36} />
+          <p style={{ color: "#94a3b8", fontSize: 15, margin: 0 }}>{status === "connecting" ? "Connecting..." : "Waiting for host..."}</p>
         </div>
       )}
       {error && (
@@ -194,7 +236,7 @@ export function JoinSession() {
         </div>
       )}
 
-      {/* The video element — always in DOM, shown when ready */}
+      {/* Video (always in DOM for ref access) */}
       <div style={{ position: "absolute", inset: 0, display: (status === "streaming" || status === "playing") ? "block" : "none" }}>
         <video
           ref={videoRef}
@@ -205,6 +247,84 @@ export function JoinSession() {
         />
         {videoEl && <VideoOverlay videoEl={videoEl} />}
       </div>
+
+      {/* ── PiP camera tiles ── */}
+      {camTiles.map(tile => {
+        const pos = floatPos.get(tile.id);
+        if (!pos) return null;
+        const size = getTileSize(tile.id);
+        const tileW = size;
+        const tileH = camShape === "circle" ? size : Math.round(size * 0.75);
+        const radius = shapeRadius(camShape);
+        const hovered = hoveredTile === tile.id;
+        const stream = tile.isLocal ? localStream : remoteStreams.find(s => s.id === tile.id) ?? null;
+
+        return (
+          <div key={tile.id}
+            onMouseEnter={() => setHoveredTile(tile.id)}
+            onMouseLeave={() => { setHoveredTile(null); setShowShapeMenu(null); setShowCamPicker(null); }}
+            style={{ position: "absolute", left: pos.x, top: pos.y, zIndex: 70, userSelect: "none", width: tileW }}>
+
+            <div onMouseDown={e => onTileMouseDown(tile.id, e)}
+              style={{ width: tileW, height: tileH, borderRadius: radius, overflow: "hidden", border: `2px solid ${hovered ? "rgba(99,102,241,0.8)" : "rgba(255,255,255,0.15)"}`, background: "#111", cursor: "grab", position: "relative", transition: "border-color 0.2s", boxShadow: "0 4px 24px rgba(0,0,0,0.6)" }}>
+
+              {/* Video feed */}
+              {tile.isLocal ? (
+                <video ref={localVideoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
+              ) : (
+                <video
+                  ref={el => { if (el && stream) { remoteVideoRefs.current.set(tile.id, el); if (el.srcObject !== stream) el.srcObject = stream; } }}
+                  autoPlay playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              )}
+
+              {/* Label */}
+              <div style={{ position: "absolute", bottom: 6, left: 8, fontSize: 10, color: "white", background: "rgba(0,0,0,0.7)", padding: "2px 6px", borderRadius: 4, pointerEvents: "none" }}>{tile.label}</div>
+
+              {/* Hover controls inside tile */}
+              {hovered && (
+                <div onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}
+                  style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.72)", padding: "6px 4px", display: "flex", gap: 4, justifyContent: "center", alignItems: "center" }}>
+                  {tile.isLocal && (
+                    <TileCtrlBtn onClick={toggleMic} title={micMuted ? "Unmute" : "Mute"}>
+                      {micMuted ? "🔇" : "🎤"}
+                    </TileCtrlBtn>
+                  )}
+                  <div style={{ position: "relative" }}>
+                    <TileCtrlBtn onClick={() => setShowShapeMenu(s => s === tile.id ? null : tile.id)} title="Shape">⬡</TileCtrlBtn>
+                    {showShapeMenu === tile.id && (
+                      <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: "50%", transform: "translateX(-50%)", background: "#111", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8, padding: 6, display: "flex", gap: 4, zIndex: 10 }}>
+                        {(["circle", "rounded", "square"] as CamShape[]).map(s => (
+                          <button key={s} onClick={() => { setCamShape(s); setShowShapeMenu(null); }}
+                            style={{ width: 26, height: 26, background: camShape === s ? "rgba(99,102,241,0.4)" : "rgba(255,255,255,0.08)", border: `1px solid ${camShape === s ? "#6366f1" : "rgba(255,255,255,0.1)"}`, borderRadius: s === "circle" ? "50%" : s === "rounded" ? 6 : 2, cursor: "pointer", fontSize: 13, color: "#e2e8f0", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            {s === "circle" ? "●" : s === "rounded" ? "▢" : "□"}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <TileCtrlBtn onClick={() => changeSize(tile.id, -20)} title="Shrink">−</TileCtrlBtn>
+                  <TileCtrlBtn onClick={() => changeSize(tile.id, 20)} title="Grow">+</TileCtrlBtn>
+                  {tile.isLocal && availCams.length > 0 && (
+                    <div style={{ position: "relative" }}>
+                      <TileCtrlBtn onClick={() => setShowCamPicker(s => s === tile.id ? null : tile.id)} title="Switch camera">⚙</TileCtrlBtn>
+                      {showCamPicker === tile.id && (
+                        <div style={{ position: "absolute", bottom: "calc(100% + 4px)", left: "50%", transform: "translateX(-50%)", background: "#111", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: 6, minWidth: 160, zIndex: 10 }}>
+                          {availCams.map(cam => (
+                            <button key={cam.deviceId} onClick={() => switchCamera(cam.deviceId)}
+                              style={{ display: "block", width: "100%", background: selectedCamId === cam.deviceId ? "rgba(99,102,241,0.2)" : "transparent", border: "none", color: "#e2e8f0", padding: "5px 8px", fontSize: 11, cursor: "pointer", borderRadius: 4, textAlign: "left" }}>
+                              {cam.label || `Camera ${availCams.indexOf(cam) + 1}`}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
 
       {/* ── Top bar ── */}
       <div style={{ position: "absolute", top: 0, left: 0, right: chatOpen ? 340 : 0, zIndex: 20, background: "linear-gradient(to bottom, rgba(0,0,0,0.88), transparent)", padding: "12px 20px", display: "flex", alignItems: "center", gap: 10 }}>
@@ -218,70 +338,14 @@ export function JoinSession() {
         <button onClick={handleLeave} style={btnGhost}>← Leave</button>
       </div>
 
-      {/* ── Bottom strip ── */}
-      <div style={{ position: "absolute", bottom: 0, left: 0, right: chatOpen ? 340 : 0, zIndex: 20, background: "linear-gradient(to top, rgba(0,0,0,0.92), transparent)", padding: "28px 16px 14px" }}>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 8, overflowX: "auto", scrollbarWidth: "none" }}>
-
-          {camTiles.map(tile => {
-            const pinned = pinnedCam === tile.id;
-            const tw = pinned ? tileW * 1.5 : tileW;
-            const th = pinned ? tileH * 1.5 : tileH;
-            const stream = tile.isLocal ? localStream : remoteStreams.find(s => s.id === tile.id) ?? null;
-            return (
-              <div key={tile.id}
-                onClick={() => setPinnedCam(p => p === tile.id ? null : tile.id)}
-                style={{ position: "relative", flexShrink: 0, width: tw, height: th, borderRadius: shapeRadius, overflow: "hidden", border: `2px solid ${pinned ? "#6366f1" : "rgba(255,255,255,0.12)"}`, background: "#111", cursor: "pointer", transition: "width 0.2s, height 0.2s" }}>
-                {tile.isLocal ? (
-                  <video ref={localVideoRef} autoPlay muted playsInline style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
-                ) : (
-                  <video ref={el => { if (el && stream) { remoteVideoRefs.current.set(tile.id, el); if (el.srcObject !== stream) el.srcObject = stream; } }} autoPlay playsInline style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                )}
-                <div style={{ position: "absolute", bottom: 4, left: 6, fontSize: 10, color: "white", background: "rgba(0,0,0,0.65)", padding: "1px 5px", borderRadius: 4 }}>{tile.label}</div>
-                {tile.isLocal && (
-                  <div style={{ position: "absolute", top: 4, right: 4, display: "flex", gap: 3 }}>
-                    <MiniBtn onClick={e => { e.stopPropagation(); toggleMic(); }}>{micMuted ? "🔇" : "🎤"}</MiniBtn>
-                    <MiniBtn onClick={e => { e.stopPropagation(); setShowCamPicker(p => !p); }}>⚙</MiniBtn>
-                  </div>
-                )}
-                {showCamPicker && tile.isLocal && (
-                  <div onClick={e => e.stopPropagation()} style={{ position: "absolute", bottom: "100%", left: 0, background: "#0d0d0d", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 10, padding: 8, minWidth: 180, zIndex: 30, marginBottom: 4 }}>
-                    {availCams.map(cam => (
-                      <button key={cam.deviceId} onClick={() => switchCamera(cam.deviceId)}
-                        style={{ display: "block", width: "100%", background: selectedCamId === cam.deviceId ? "rgba(99,102,241,0.2)" : "transparent", border: "none", color: "#e2e8f0", padding: "6px 8px", fontSize: 12, cursor: "pointer", borderRadius: 6, textAlign: "left" }}>
-                        {cam.label || `Camera ${availCams.indexOf(cam) + 1}`}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          {camTiles.length === 0 && <span style={{ fontSize: 12, color: "rgba(255,255,255,0.3)", marginBottom: 8 }}>No cameras on</span>}
-          <div style={{ flex: 1 }} />
-
-          {/* Shape */}
-          <div style={{ position: "relative", flexShrink: 0 }}>
-            <StripBtn onClick={() => setShowShapeMenu(s => !s)}>⬜</StripBtn>
-            {showShapeMenu && (
-              <div style={{ position: "absolute", bottom: 48, right: 0, background: "#0d0d0d", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: 10, display: "flex", gap: 8, zIndex: 30 }}>
-                {(["circle", "rounded", "square"] as CamShape[]).map(s => (
-                  <button key={s} onClick={() => { setCamShape(s); setShowShapeMenu(false); }}
-                    style={{ width: 40, height: 40, background: camShape === s ? "rgba(99,102,241,0.3)" : "rgba(255,255,255,0.07)", border: `1px solid ${camShape === s ? "#6366f1" : "rgba(255,255,255,0.1)"}`, borderRadius: s === "circle" ? "50%" : s === "rounded" ? 8 : 2, cursor: "pointer", color: "#e2e8f0", fontSize: 11 }}>
-                    {s[0].toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <StripBtn onClick={chatOpen ? closeChat : openChat} active={chatOpen}>
-            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-          </StripBtn>
-        </div>
+      {/* ── Bottom controls ── */}
+      <div style={{ position: "absolute", bottom: 0, left: 0, right: chatOpen ? 340 : 0, zIndex: 20, background: "linear-gradient(to top, rgba(0,0,0,0.82), transparent)", padding: "28px 20px 14px", display: "flex", justifyContent: "flex-end", alignItems: "flex-end", gap: 10 }}>
+        <StripBtn onClick={chatOpen ? closeChat : openChat} active={chatOpen} title="Chat">
+          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+        </StripBtn>
       </div>
 
-      {/* ── Chat overlay (conditionally mounted) ── */}
+      {/* ── Chat overlay ── */}
       {chatMounted && (
         <div style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: 340, background: "rgba(10,10,10,0.97)", backdropFilter: "blur(20px)", borderLeft: "1px solid rgba(255,255,255,0.07)", transform: chatOpen ? "translateX(0)" : "translateX(340px)", transition: "transform 0.28s ease", zIndex: 50, display: "flex", flexDirection: "column" }}>
           <div style={{ padding: "16px 18px", borderBottom: "1px solid rgba(255,255,255,0.07)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -315,13 +379,15 @@ export function JoinSession() {
 
       {/* ── Chat toasts ── */}
       {!chatOpen && (
-        <div style={{ position: "absolute", bottom: 128, right: 16, zIndex: 60, display: "flex", flexDirection: "column-reverse", gap: 8, alignItems: "flex-end", maxWidth: 270, pointerEvents: "none" }}>
+        <div style={{ position: "absolute", bottom: 80, right: 16, zIndex: 60, display: "flex", flexDirection: "column-reverse", gap: 8, alignItems: "flex-end", maxWidth: 270, pointerEvents: "none" }}>
           {chatToasts.map(t => <ChatToast key={t.id} from={t.from} text={t.text} />)}
         </div>
       )}
     </div>
   );
 }
+
+// ── Sub-components ──────────────────────────────────────────────────────────
 
 function ChatToast({ from, text }: { from: string; text: string }) {
   const [vis, setVis] = useState(true);
@@ -344,12 +410,14 @@ function StatusBadge({ status, progress }: { status: Status; progress: number })
   return <span style={{ background: `${color}18`, border: `1px solid ${color}40`, color, borderRadius: 20, padding: "4px 12px", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}` }} />{text}</span>;
 }
 
-function MiniBtn({ children, onClick }: { children: React.ReactNode; onClick?: React.MouseEventHandler }) {
-  return <button onClick={onClick} style={{ background: "rgba(0,0,0,0.6)", border: "none", borderRadius: 4, padding: "2px 4px", fontSize: 11, cursor: "pointer", color: "white", lineHeight: 1 }}>{children}</button>;
+function TileCtrlBtn({ children, onClick, title }: { children: React.ReactNode; onClick?: React.MouseEventHandler; title?: string }) {
+  return <button onClick={onClick} title={title} style={{ background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 5, padding: "2px 6px", fontSize: 12, cursor: "pointer", color: "white", lineHeight: 1.4, minWidth: 24, display: "flex", alignItems: "center", justifyContent: "center" }}>{children}</button>;
 }
-function StripBtn({ children, onClick, active }: { children: React.ReactNode; onClick?: () => void; active?: boolean }) {
-  return <button onClick={onClick} style={{ background: active ? "rgba(99,102,241,0.9)" : "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", color: "white", borderRadius: 10, width: 42, height: 42, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "background 0.2s" }}>{children}</button>;
+
+function StripBtn({ children, onClick, active, title }: { children: React.ReactNode; onClick?: () => void; active?: boolean; title?: string }) {
+  return <button onClick={onClick} title={title} style={{ background: active ? "rgba(99,102,241,0.9)" : "rgba(255,255,255,0.1)", border: "1px solid rgba(255,255,255,0.12)", color: "white", borderRadius: 10, width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, transition: "background 0.2s" }}>{children}</button>;
 }
+
 function Spinner({ size = 20 }: { size?: number }) {
   return <svg width={size} height={size} fill="none" viewBox="0 0 24 24" style={{ animation: "spin 1s linear infinite" }}><circle cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.15)" strokeWidth="3" /><path fill="#6366f1" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>;
 }

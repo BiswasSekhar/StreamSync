@@ -33,7 +33,8 @@
       "Bash(start pnpm:*)",
       "Bash(netstat:*)",
       "Bash(cmd:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(ls FOUND:*)"
     ]
   }
 }
