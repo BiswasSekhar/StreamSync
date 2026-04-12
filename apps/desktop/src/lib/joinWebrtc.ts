@@ -12,18 +12,21 @@ export class JoinWebRTC {
   private ws: WebSocket | null = null;
   private syncController = new SyncController();
   private pingInterval: ReturnType<typeof setInterval> | null = null;
-
-  constructor(
-    private onMagnet: (magnet: string, fileName: string) => void,
-    private onSync: (sync: SyncMessage) => void,
-    private onChat: (msg: ChatMessage) => void,
-    private onConnected: () => void,
-    private onDisconnected: () => void
-  ) {}
-
   private pendingCandidates: any[] = [];
   private remoteSet = false;
   private chatDc: RTCDataChannel | null = null;
+  private initialOfferResolved = false;
+  private hostPeerId: string | null = null;
+  private receivedStreamIds = new Set<string>();
+
+  constructor(
+    private onMagnet: (magnet: string, fileName: string, videoUrl: string) => void,
+    private onSync: (sync: SyncMessage) => void,
+    private onChat: (msg: ChatMessage) => void,
+    private onConnected: () => void,
+    private onDisconnected: () => void,
+    private onRemoteStream: (stream: MediaStream) => void = () => {}
+  ) {}
 
   async connect(roomUrl: string): Promise<MediaStream | null> {
     let fullUrl = roomUrl.trim();
@@ -42,13 +45,9 @@ export class JoinWebRTC {
     return new Promise((resolve) => {
       this.ws!.onopen = () => {
         this.startPingLoop();
-        this.ws!.send(
-          JSON.stringify({
-            type: "join",
-            room: roomId,
-            displayName: getDisplayName(),
-          })
-        );
+        this.ws!.send(JSON.stringify({
+          type: "join", room: roomId, displayName: getDisplayName(),
+        }));
       };
 
       this.ws!.onmessage = async (e) => {
@@ -60,24 +59,33 @@ export class JoinWebRTC {
         }
 
         if (msg.type === "offer") {
-          try {
-            const stream = await this.handleOffer(msg.sdp, msg.peerId);
-            resolve(stream);
-          } catch (err) {
-            console.error("Failed to handle offer:", err);
-            resolve(null);
-          }
-        } else if (msg.type === "ice-candidate") {
-          if (this.remoteSet && this.pc) {
+          if (!this.initialOfferResolved) {
+            // First offer: full handshake
             try {
-              await this.pc.addIceCandidate(msg.candidate);
-            } catch (e) {
-              console.error("Failed to add ICE candidate:", e);
+              const stream = await this.handleOffer(msg.sdp, msg.peerId);
+              this.initialOfferResolved = true;
+              resolve(stream);
+            } catch (err) {
+              console.error("[JoinWebRTC] Failed to handle offer:", err);
+              resolve(null);
             }
+          } else {
+            // Subsequent offer: renegotiation (host added new peer stream)
+            await this.handleReoffer(msg.sdp);
+          }
+          return;
+        }
+
+        if (msg.type === "ice-candidate") {
+          if (this.remoteSet && this.pc) {
+            try { await this.pc.addIceCandidate(msg.candidate); } catch {}
           } else {
             this.pendingCandidates.push(msg.candidate);
           }
-        } else if (msg.type === "pong") {
+          return;
+        }
+
+        if (msg.type === "pong") {
           const t3 = Date.now();
           this.syncController.updateClockOffset(msg.timestamp, msg.serverTime, t3);
         }
@@ -88,6 +96,8 @@ export class JoinWebRTC {
   }
 
   private async handleOffer(sdp: string, hostPeerId: string): Promise<MediaStream | null> {
+    this.hostPeerId = hostPeerId;
+
     this.pc = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
@@ -95,6 +105,16 @@ export class JoinWebRTC {
       ],
     });
 
+    // Receive remote streams (host camera + forwarded viewer cameras)
+    this.pc.ontrack = (e) => {
+      console.log("[JoinWebRTC] Received track:", e.track.kind);
+      const stream = e.streams?.[0];
+      if (!stream || this.receivedStreamIds.has(stream.id)) return;
+      this.receivedStreamIds.add(stream.id);
+      this.onRemoteStream(stream);
+    };
+
+    // Get local camera + mic (optional)
     let localStream: MediaStream | null = null;
     try {
       localStream = await navigator.mediaDevices.getUserMedia({
@@ -108,6 +128,7 @@ export class JoinWebRTC {
       // Camera optional
     }
 
+    // Data channels
     this.pc.ondatachannel = (e) => {
       const dc = e.channel;
 
@@ -116,7 +137,11 @@ export class JoinWebRTC {
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === "magnet") {
-              this.onMagnet(msg.magnet, msg.fileName || "video");
+              this.onMagnet(
+                msg.magnet,
+                msg.fileName || "video",
+                msg.videoUrl || ""
+              );
             }
           } catch {}
         };
@@ -124,65 +149,65 @@ export class JoinWebRTC {
 
       if (dc.label === "sync") {
         dc.onmessage = (ev) => {
-          try {
-            const sync: SyncMessage = JSON.parse(ev.data);
-            this.onSync(sync);
-          } catch {}
+          try { this.onSync(JSON.parse(ev.data)); } catch {}
         };
       }
 
       if (dc.label === "chat") {
         this.chatDc = dc;
         dc.onmessage = (ev) => {
-          try {
-            const msg: ChatMessage = JSON.parse(ev.data);
-            this.onChat(msg);
-          } catch {}
+          try { this.onChat(JSON.parse(ev.data)); } catch {}
         };
       }
     };
 
     this.pc.onconnectionstatechange = () => {
       console.log("[JoinWebRTC] Connection state:", this.pc?.connectionState);
-      if (this.pc?.connectionState === "connected") {
-        this.onConnected();
-        // Keep WebSocket alive — signaller uses it to track room membership
-      }
-      if (
-        this.pc?.connectionState === "disconnected" ||
-        this.pc?.connectionState === "failed"
-      ) {
+      if (this.pc?.connectionState === "connected") this.onConnected();
+      if (this.pc?.connectionState === "disconnected" || this.pc?.connectionState === "failed") {
         this.onDisconnected();
       }
     };
 
     await this.pc.setRemoteDescription({ type: "offer", sdp });
     this.remoteSet = true;
+
     for (const c of this.pendingCandidates) {
-      try {
-        await this.pc.addIceCandidate(c);
-      } catch (err) {
-        console.error("Failed to add pending ICE candidate", err);
-      }
+      try { await this.pc.addIceCandidate(c); } catch {}
     }
     this.pendingCandidates = [];
 
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
 
-    this.ws!.send(
-      JSON.stringify({ type: "answer", sdp: answer.sdp, peerId: hostPeerId })
-    );
+    this.ws!.send(JSON.stringify({ type: "answer", sdp: answer.sdp, peerId: hostPeerId }));
 
     this.pc.onicecandidate = (e) => {
       if (e.candidate && this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({ type: "ice-candidate", candidate: e.candidate.toJSON(), peerId: hostPeerId })
-        );
+        this.ws.send(JSON.stringify({
+          type: "ice-candidate", candidate: e.candidate.toJSON(), peerId: hostPeerId,
+        }));
       }
     };
 
     return localStream;
+  }
+
+  /**
+   * Handle a renegotiation offer from the host (new peer joined, host forwarded their tracks).
+   */
+  private async handleReoffer(sdp: string) {
+    if (!this.pc || !this.hostPeerId) return;
+    try {
+      await this.pc.setRemoteDescription({ type: "offer", sdp });
+      const answer = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(answer);
+      this.ws!.send(JSON.stringify({
+        type: "answer", sdp: answer.sdp, peerId: this.hostPeerId,
+      }));
+    } catch (err) {
+      console.error("[JoinWebRTC] Reoffer handling failed:", err);
+    }
   }
 
   private startPingLoop() {
@@ -200,10 +225,7 @@ export class JoinWebRTC {
 
   sendChat(text: string) {
     const msg = {
-      id: crypto.randomUUID(),
-      from: getDisplayName(),
-      text,
-      timestamp: Date.now(),
+      id: crypto.randomUUID(), from: getDisplayName(), text, timestamp: Date.now(),
     };
     if (this.chatDc?.readyState === "open") {
       this.chatDc.send(JSON.stringify(msg));

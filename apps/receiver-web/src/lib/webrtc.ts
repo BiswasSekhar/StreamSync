@@ -15,6 +15,9 @@ export class ReceiverWebRTC {
   private pendingCandidates: any[] = [];
   private remoteSet = false;
   private chatDc: RTCDataChannel | null = null;
+  private initialOfferResolved = false;
+  private hostPeerId: string | null = null;
+  private receivedStreamIds = new Set<string>();
 
   constructor(
     private onMagnet: (magnet: string, fileName: string, videoUrl: string) => void,
@@ -55,12 +58,18 @@ export class ReceiverWebRTC {
         }
 
         if (msg.type === "offer") {
-          try {
-            const stream = await this.handleOffer(msg.sdp, msg.peerId);
-            resolve(stream);
-          } catch (err) {
-            console.error("Failed to handle offer:", err);
-            resolve(null);
+          if (!this.initialOfferResolved) {
+            try {
+              const stream = await this.handleOffer(msg.sdp, msg.peerId);
+              this.initialOfferResolved = true;
+              resolve(stream);
+            } catch (err) {
+              console.error("Failed to handle offer:", err);
+              resolve(null);
+            }
+          } else {
+            // Renegotiation offer from host (new peer joined, host forwarded their tracks)
+            await this.handleReoffer(msg.sdp);
           }
         } else if (msg.type === "ice-candidate") {
           if (this.remoteSet && this.pc) {
@@ -87,10 +96,26 @@ export class ReceiverWebRTC {
     });
   }
 
+  private async handleReoffer(sdp: string) {
+    if (!this.pc || !this.hostPeerId) return;
+    try {
+      await this.pc.setRemoteDescription({ type: "offer", sdp });
+      const answer = await this.pc.createAnswer();
+      await this.pc.setLocalDescription(answer);
+      this.ws!.send(JSON.stringify({
+        type: "answer", sdp: answer.sdp, peerId: this.hostPeerId,
+      }));
+    } catch (err) {
+      console.error("[ReceiverWebRTC] Reoffer handling failed:", err);
+    }
+  }
+
   private async handleOffer(
     sdp: string,
     hostPeerId: string
   ): Promise<MediaStream | null> {
+    this.hostPeerId = hostPeerId;
+
     this.pc = new RTCPeerConnection({
       iceServers: [
         { urls: "stun:stun.l.google.com:19302" },
@@ -98,12 +123,13 @@ export class ReceiverWebRTC {
       ],
     });
 
-    // Receive remote camera/audio from the host
+    // Receive remote streams (host camera + forwarded viewer cameras)
     this.pc.ontrack = (e) => {
       console.log("[ReceiverWebRTC] Received track:", e.track.kind);
-      if (e.streams && e.streams[0]) {
-        this.onRemoteStream(e.streams[0]);
-      }
+      const stream = e.streams?.[0];
+      if (!stream || this.receivedStreamIds.has(stream.id)) return;
+      this.receivedStreamIds.add(stream.id);
+      this.onRemoteStream(stream);
     };
 
     // Get local camera + mic (optional — catch errors gracefully)

@@ -8,7 +8,7 @@
  *   - sync: sends play/pause/seek state
  *   - chat: bidirectional chat
  *
- * Also handles video/audio transceivers for camera feeds.
+ * Also forwards remote tracks between all peers (meet/discord style).
  */
 
 export interface SyncState {
@@ -30,6 +30,8 @@ interface PeerChannels {
   controlDc: RTCDataChannel | null;
   syncDc: RTCDataChannel | null;
   chatDc: RTCDataChannel | null;
+  videoTransceiver: RTCRtpTransceiver;
+  audioTransceiver: RTCRtpTransceiver;
   remoteSet: boolean;
   pendingCandidates: any[];
 }
@@ -42,6 +44,8 @@ export class HostWebRTC {
   private fileName: string = "";
   private videoUrl: string = "";
   private localStream: MediaStream | null = null;
+  // Streams received from each peer — forwarded to other peers
+  private peerStreams = new Map<string, MediaStream>();
   private syncSeq = 0;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -53,9 +57,6 @@ export class HostWebRTC {
     private onRemoteStream: (peerId: string, stream: MediaStream) => void = () => {}
   ) {}
 
-  /**
-   * Connect to the local signaller and join the room.
-   */
   connect(roomId: string, displayName: string = "Host") {
     const wsUrl = "ws://localhost:8787/ws";
     this.ws = new WebSocket(wsUrl);
@@ -63,13 +64,7 @@ export class HostWebRTC {
     this.ws.onopen = () => {
       console.log("[HostWebRTC] Connected to signaller");
       this.startPingLoop();
-      this.ws!.send(
-        JSON.stringify({
-          type: "join",
-          room: roomId,
-          displayName,
-        })
-      );
+      this.ws!.send(JSON.stringify({ type: "join", room: roomId, displayName }));
     };
 
     this.ws.onmessage = async (e) => {
@@ -81,101 +76,56 @@ export class HostWebRTC {
       }
     };
 
-    this.ws.onerror = (e) => {
-      console.error("[HostWebRTC] WebSocket error:", e);
-      this.onError("WebSocket connection failed");
-    };
-
-    this.ws.onclose = () => {
-      console.log("[HostWebRTC] WebSocket closed");
-    };
+    this.ws.onerror = () => this.onError("WebSocket connection failed");
+    this.ws.onclose = () => console.log("[HostWebRTC] WebSocket closed");
   }
 
   /**
-   * Set the magnet link and video URL. Will be sent to all existing and future peers.
-   * @param videoUrl  Direct HTTP URL to the host's video file (range-request capable)
+   * Set magnet link + direct HTTP video URL. Sent to all current and future peers.
    */
   setMagnet(magnet: string, fileName: string, videoUrl: string = "") {
     this.magnetLink = magnet;
     this.fileName = fileName;
     this.videoUrl = videoUrl;
-
-    // Send to all currently connected peers
     for (const [, peer] of this.peers) {
       this.sendMagnetToPeer(peer);
     }
   }
 
   /**
-   * Set/update the local camera stream. Adds tracks to all active peer connections.
-   * Call this whenever the host starts or stops the camera.
+   * Set/update the local camera stream.
+   * Adds or replaces tracks on all existing peer connections.
    */
   setLocalStream(stream: MediaStream | null) {
     this.localStream = stream;
-
     for (const [, peer] of this.peers) {
-      const senders = peer.pc.getSenders();
-
-      if (!stream) {
-        // Remove all media senders
-        senders.forEach((s) => {
-          if (s.track) peer.pc.removeTrack(s);
-        });
-        return;
-      }
-
-      stream.getTracks().forEach((track) => {
-        const existingSender = senders.find((s) => s.track?.kind === track.kind);
-        if (existingSender) {
-          existingSender.replaceTrack(track).catch(console.error);
-        } else {
-          peer.pc.addTrack(track, stream);
-        }
-      });
+      this.applyLocalStreamToPeer(peer, stream);
     }
   }
 
-  /**
-   * Broadcast sync state to all peers.
-   */
   broadcastSync(position: number, playing: boolean) {
     this.syncSeq++;
     const msg = JSON.stringify({
-      type: "sync",
-      position,
-      playing,
-      timestamp: Date.now(),
-      sequence: this.syncSeq,
+      type: "sync", position, playing,
+      timestamp: Date.now(), sequence: this.syncSeq,
     });
-
     for (const [, peer] of this.peers) {
-      if (peer.syncDc?.readyState === "open") {
-        peer.syncDc.send(msg);
-      }
+      if (peer.syncDc?.readyState === "open") peer.syncDc.send(msg);
     }
   }
 
-  /**
-   * Broadcast chat to all peers via data channels.
-   */
   broadcastChat(chatMsg: ChatMsg) {
     const json = JSON.stringify(chatMsg);
     for (const [, peer] of this.peers) {
-      if (peer.chatDc?.readyState === "open") {
-        peer.chatDc.send(json);
-      }
+      if (peer.chatDc?.readyState === "open") peer.chatDc.send(json);
     }
   }
 
-  get peerCount(): number {
-    return this.peers.size;
-  }
+  get peerCount(): number { return this.peers.size; }
 
   close() {
     if (this.pingInterval) clearInterval(this.pingInterval);
-    for (const [, peer] of this.peers) {
-      peer.pc.close();
-    }
+    for (const [, peer] of this.peers) peer.pc.close();
     this.peers.clear();
     this.ws?.close();
     this.ws = null;
@@ -206,7 +156,6 @@ export class HostWebRTC {
         break;
 
       case "peer-left":
-        console.log("[HostWebRTC] Peer left:", msg.peerId);
         this.cleanupPeer(msg.peerId);
         this.onPeerLeft(msg.peerId);
         break;
@@ -218,12 +167,6 @@ export class HostWebRTC {
       case "ice-candidate":
         await this.handleIceCandidate(msg.peerId, msg.candidate);
         break;
-
-      case "pong":
-        break;
-
-      default:
-        console.log("[HostWebRTC] Unknown signal:", msg.type);
     }
   }
 
@@ -235,117 +178,156 @@ export class HostWebRTC {
       ],
     });
 
-    // Add video+audio transceivers BEFORE the offer so the SDP includes media sections.
-    // This is required for the receiver to be able to send/receive camera streams.
-    pc.addTransceiver("video", { direction: "sendrecv" });
-    pc.addTransceiver("audio", { direction: "sendrecv" });
+    // Add sendrecv transceivers for host's own camera (BEFORE creating the offer
+    // so media sections appear in the SDP and the peer can send/recv video).
+    const videoTransceiver = pc.addTransceiver("video", { direction: "sendrecv" });
+    const audioTransceiver = pc.addTransceiver("audio", { direction: "sendrecv" });
 
-    // If we already have a local camera stream, add its tracks now
+    // Add host's local camera tracks (if already streaming)
     if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
-        pc.addTrack(track, this.localStream!);
-      });
+      this.applyLocalStreamToTransceivers(pc, videoTransceiver, audioTransceiver, this.localStream);
     }
 
-    // Create data channels (host initiates)
+    // Forward all existing peer streams to this new peer.
+    // Each forwarded stream gets its own sendrecv transceiver pair.
+    for (const [, stream] of this.peerStreams) {
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+    }
+
+    // Data channels
     const controlDc = pc.createDataChannel("control", { ordered: true });
-    const syncDc = pc.createDataChannel("sync", {
-      ordered: false,
-      maxRetransmits: 0,
-    });
+    const syncDc = pc.createDataChannel("sync", { ordered: false, maxRetransmits: 0 });
     const chatDc = pc.createDataChannel("chat", { ordered: true });
 
     const peerChannels: PeerChannels = {
-      pc,
-      controlDc,
-      syncDc,
-      chatDc,
-      remoteSet: false,
-      pendingCandidates: [],
+      pc, controlDc, syncDc, chatDc,
+      videoTransceiver, audioTransceiver,
+      remoteSet: false, pendingCandidates: [],
     };
     this.peers.set(peerId, peerChannels);
 
-    // When control channel opens, send magnet + video URL
-    controlDc.onopen = () => {
-      console.log(`[HostWebRTC] Control channel open with ${peerId}`);
-      this.sendMagnetToPeer(peerChannels);
-    };
-
-    // Handle incoming chat from peer
+    controlDc.onopen = () => this.sendMagnetToPeer(peerChannels);
     chatDc.onmessage = (e) => {
-      try {
-        const msg: ChatMsg = JSON.parse(e.data);
-        this.onChat(msg);
-      } catch {}
+      try { this.onChat(JSON.parse(e.data)); } catch {}
     };
 
-    // Receive remote camera stream from peer
+    // ---- ontrack: receive remote camera, forward to other peers ----
+    const seenStreams = new Set<string>();
     pc.ontrack = (e) => {
-      console.log(`[HostWebRTC] Received track from ${peerId}:`, e.track.kind);
-      if (e.streams && e.streams[0]) {
-        this.onRemoteStream(peerId, e.streams[0]);
+      console.log(`[HostWebRTC] Track from ${peerId}:`, e.track.kind);
+      const stream = e.streams?.[0];
+      if (!stream || seenStreams.has(stream.id)) return;
+      seenStreams.add(stream.id);
+
+      this.peerStreams.set(peerId, stream);
+      this.onRemoteStream(peerId, stream);
+
+      // Forward this stream to all OTHER connected peers
+      for (const [otherId, otherPeer] of this.peers) {
+        if (otherId === peerId) continue;
+        stream.getTracks().forEach((track) => otherPeer.pc.addTrack(track, stream));
       }
     };
 
-    // ICE candidates → relay to peer via signaller
+    // ICE candidates
     pc.onicecandidate = (e) => {
       if (e.candidate && this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            type: "ice-candidate",
-            candidate: e.candidate.toJSON(),
-            peerId,
-          })
-        );
+        this.ws.send(JSON.stringify({
+          type: "ice-candidate", candidate: e.candidate.toJSON(), peerId,
+        }));
       }
     };
 
-    // Connection state tracking
+    // Connection state
     pc.onconnectionstatechange = () => {
       console.log(`[HostWebRTC] Peer ${peerId} state: ${pc.connectionState}`);
-      if (
-        pc.connectionState === "failed" ||
-        pc.connectionState === "disconnected"
-      ) {
+      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
         this.cleanupPeer(peerId);
         this.onPeerLeft(peerId);
       }
     };
 
-    // Create and send offer
+    // Create initial offer BEFORE enabling the renegotiation handler
+    // (prevents negotiationneeded from firing during initial setup)
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(
-        JSON.stringify({
-          type: "offer",
-          sdp: offer.sdp,
-          peerId,
-        })
-      );
+      this.ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp, peerId }));
+    }
+
+    // NOW enable renegotiation for future track additions (e.g. other peers joining)
+    let renegotiating = false;
+    pc.onnegotiationneeded = async () => {
+      if (renegotiating || pc.signalingState !== "stable") return;
+      renegotiating = true;
+      try {
+        const reOffer = await pc.createOffer();
+        await pc.setLocalDescription(reOffer);
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: "offer", sdp: reOffer.sdp, peerId }));
+        }
+      } catch (err) {
+        console.error("[HostWebRTC] Renegotiation failed:", err);
+      } finally {
+        renegotiating = false;
+      }
+    };
+  }
+
+  /**
+   * Apply local stream to an existing peer using stored transceiver refs.
+   * Avoids the null-track sender matching problem.
+   */
+  private applyLocalStreamToPeer(peer: PeerChannels, stream: MediaStream | null) {
+    if (!stream) {
+      // Null out the track on both transceivers
+      peer.videoTransceiver.sender.replaceTrack(null).catch(() => {});
+      peer.audioTransceiver.sender.replaceTrack(null).catch(() => {});
+      return;
+    }
+    this.applyLocalStreamToTransceivers(
+      peer.pc, peer.videoTransceiver, peer.audioTransceiver, stream
+    );
+  }
+
+  /**
+   * Add or replace local stream tracks on the video/audio transceivers.
+   */
+  private applyLocalStreamToTransceivers(
+    pc: RTCPeerConnection,
+    videoTransceiver: RTCRtpTransceiver,
+    audioTransceiver: RTCRtpTransceiver,
+    stream: MediaStream
+  ) {
+    const videoTrack = stream.getVideoTracks()[0] ?? null;
+    const audioTrack = stream.getAudioTracks()[0] ?? null;
+
+    if (videoTrack) {
+      if (videoTransceiver.sender.track) {
+        videoTransceiver.sender.replaceTrack(videoTrack).catch(console.error);
+      } else {
+        // sender.track is null — addTrack reuses this transceiver
+        pc.addTrack(videoTrack, stream);
+      }
+    }
+    if (audioTrack) {
+      if (audioTransceiver.sender.track) {
+        audioTransceiver.sender.replaceTrack(audioTrack).catch(console.error);
+      } else {
+        pc.addTrack(audioTrack, stream);
+      }
     }
   }
 
   private async handleAnswer(peerId: string, sdp: string) {
     const peer = this.peers.get(peerId);
-    if (!peer) {
-      console.warn(`[HostWebRTC] Answer from unknown peer: ${peerId}`);
-      return;
-    }
+    if (!peer) return;
     try {
       await peer.pc.setRemoteDescription({ type: "answer", sdp });
-      console.log(`[HostWebRTC] Set remote description for ${peerId}`);
       peer.remoteSet = true;
       for (const c of peer.pendingCandidates) {
-        try {
-          await peer.pc.addIceCandidate(c);
-        } catch (err) {
-          console.error(
-            `[HostWebRTC] Failed to add pending ICE candidate for ${peerId}:`,
-            err
-          );
-        }
+        try { await peer.pc.addIceCandidate(c); } catch {}
       }
       peer.pendingCandidates = [];
     } catch (err) {
@@ -357,11 +339,7 @@ export class HostWebRTC {
     const peer = this.peers.get(peerId);
     if (!peer) return;
     if (peer.remoteSet) {
-      try {
-        await peer.pc.addIceCandidate(candidate);
-      } catch (err) {
-        console.error(`[HostWebRTC] Failed to add ICE candidate:`, err);
-      }
+      try { await peer.pc.addIceCandidate(candidate); } catch {}
     } else {
       peer.pendingCandidates.push(candidate);
     }
@@ -370,22 +348,18 @@ export class HostWebRTC {
   private sendMagnetToPeer(peer: PeerChannels) {
     if (!this.magnetLink) return;
     if (peer.controlDc?.readyState === "open") {
-      peer.controlDc.send(
-        JSON.stringify({
-          type: "magnet",
-          magnet: this.magnetLink,
-          fileName: this.fileName,
-          videoUrl: this.videoUrl, // direct HTTP URL for streaming
-        })
-      );
+      peer.controlDc.send(JSON.stringify({
+        type: "magnet",
+        magnet: this.magnetLink,
+        fileName: this.fileName,
+        videoUrl: this.videoUrl,
+      }));
     }
   }
 
   private cleanupPeer(peerId: string) {
     const peer = this.peers.get(peerId);
-    if (peer) {
-      peer.pc.close();
-      this.peers.delete(peerId);
-    }
+    if (peer) { peer.pc.close(); this.peers.delete(peerId); }
+    this.peerStreams.delete(peerId);
   }
 }

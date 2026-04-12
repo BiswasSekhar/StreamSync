@@ -22,12 +22,12 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const webrtcRef = useRef<ReceiverWebRTC | null>(null);
   const pendingSyncRef = useRef<SyncMessage | null>(null);
 
@@ -99,7 +99,10 @@ export default function App() {
   }, []);
 
   const handleRemoteStream = useCallback((stream: MediaStream) => {
-    setRemoteStream(stream);
+    setRemoteStreams((prev) => {
+      if (prev.some((s) => s.id === stream.id)) return prev;
+      return [...prev, stream];
+    });
   }, []);
 
   useEffect(() => {
@@ -132,12 +135,13 @@ export default function App() {
     };
   }, [handleChat, handleMagnet, handleSync, handleRemoteStream, roomId, roomUrl]);
 
-  // Attach remote stream to its video element
+  // Attach each remote stream to its video element
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-    }
-  }, [remoteStream]);
+    remoteStreams.forEach((stream) => {
+      const el = remoteVideoRefs.current.get(stream.id);
+      if (el && el.srcObject !== stream) el.srcObject = stream;
+    });
+  }, [remoteStreams]);
 
   if (!roomId) {
     return (
@@ -240,40 +244,46 @@ export default function App() {
         {/* Sidebar */}
         <div style={{ width: 320, borderLeft: "1px solid rgba(255,255,255,0.05)", display: "flex", flexDirection: "column", background: "rgba(20,20,20,0.95)", backdropFilter: "blur(20px)" }}>
           {/* Camera feeds */}
-          <div style={{ padding: 20, borderBottom: "1px solid rgba(255,255,255,0.05)", display: "flex", flexDirection: "column", gap: 12 }}>
-            {/* Host camera (remote) */}
-            <div>
-              <div style={{ background: "#050505", borderRadius: 12, overflow: "hidden", aspectRatio: "4/3", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.05)", boxShadow: "inset 0 2px 10px rgba(0,0,0,0.5)" }}>
-                {remoteStream ? (
+          <div style={{ padding: "16px 20px", borderBottom: "1px solid rgba(255,255,255,0.05)", display: "flex", flexDirection: "column", gap: 10, maxHeight: 320, overflowY: "auto" }}>
+            {/* Remote streams: host + forwarded viewers */}
+            {remoteStreams.map((stream, idx) => (
+              <div key={stream.id}>
+                <div style={{ background: "#050505", borderRadius: 10, overflow: "hidden", aspectRatio: "4/3", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.05)" }}>
                   <video
-                    ref={remoteVideoRef}
+                    ref={(el) => {
+                      if (el) {
+                        remoteVideoRefs.current.set(stream.id, el);
+                        if (el.srcObject !== stream) el.srcObject = stream;
+                      }
+                    }}
                     autoPlay
                     playsInline
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
                   />
-                ) : (
-                  <svg width="24" height="24" fill="none" stroke="#444" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.847v6.306a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" /></svg>
-                )}
+                </div>
+                <div style={{ marginTop: 4, fontSize: 11, color: "#9ca3af", fontWeight: 500, textAlign: "center" }}>
+                  {idx === 0 ? "Host Camera" : `Viewer ${idx}`}
+                </div>
               </div>
-              <div style={{ marginTop: 6, fontSize: 12, color: "#9ca3af", fontWeight: 500, textAlign: "center" }}>Host Camera</div>
-            </div>
+            ))}
 
-            {/* Local camera (self) */}
+            {remoteStreams.length === 0 && (
+              <div style={{ background: "#050505", borderRadius: 10, overflow: "hidden", aspectRatio: "4/3", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.05)" }}>
+                <svg width="24" height="24" fill="none" stroke="#444" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.847v6.306a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" /></svg>
+              </div>
+            )}
+
+            {/* Local self-view */}
             <div>
-              <div style={{ background: "#050505", borderRadius: 12, overflow: "hidden", aspectRatio: "4/3", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.05)", boxShadow: "inset 0 2px 10px rgba(0,0,0,0.5)" }}>
+              <div style={{ background: "#050505", borderRadius: 10, overflow: "hidden", aspectRatio: "4/3", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.05)" }}>
                 {localStream ? (
-                  <video
-                    ref={localVideoRef}
-                    autoPlay
-                    muted
-                    playsInline
-                    style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }}
-                  />
+                  <video ref={localVideoRef} autoPlay muted playsInline
+                    style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }} />
                 ) : (
                   <svg width="24" height="24" fill="none" stroke="#444" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                 )}
               </div>
-              <div style={{ marginTop: 6, fontSize: 12, color: "#9ca3af", fontWeight: 500, textAlign: "center" }}>Your Camera</div>
+              <div style={{ marginTop: 4, fontSize: 11, color: "#9ca3af", fontWeight: 500, textAlign: "center" }}>Your Camera</div>
             </div>
           </div>
 
