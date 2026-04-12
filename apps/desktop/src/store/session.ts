@@ -204,7 +204,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       timestamp: Date.now(),
     };
     set((state) => ({ messages: [...state.messages, msg] }));
-    await invoke("broadcast_chat", { message: msg });
+    // Broadcast is handled via store subscription in Session.tsx (Host)
+    // or sent via ws in JoinSession.tsx (Joiner)
   },
 
   setDisplayName: (name) => set({ displayName: name }),

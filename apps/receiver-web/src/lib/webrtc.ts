@@ -20,6 +20,9 @@ export class ReceiverWebRTC {
     private onPeerJoined: () => void,
     private onDisconnected: () => void
   ) {}
+  private pendingCandidates: any[] = [];
+  private remoteSet = false;
+  private chatDc: RTCDataChannel | null = null;
 
   async connect(roomUrl: string): Promise<MediaStream | null> {
     const url = new URL(roomUrl);
@@ -32,6 +35,7 @@ export class ReceiverWebRTC {
 
     return new Promise((resolve) => {
       this.ws!.onopen = () => {
+        this.startPingLoop();
         this.ws!.send(
           JSON.stringify({
             type: "join",
@@ -57,11 +61,15 @@ export class ReceiverWebRTC {
             console.error("Failed to handle offer:", err);
             resolve(null);
           }
-        } else if (msg.type === "ice-candidate" && this.pc) {
-          try {
-            await this.pc.addIceCandidate(msg.candidate);
-          } catch (e) {
-            console.error("Failed to add ICE candidate:", e);
+        } else if (msg.type === "ice-candidate") {
+          if (this.remoteSet && this.pc) {
+            try {
+              await this.pc.addIceCandidate(msg.candidate);
+            } catch (e) {
+              console.error("Failed to add ICE candidate:", e);
+            }
+          } else {
+            this.pendingCandidates.push(msg.candidate);
           }
         } else if (msg.type === "pong") {
           const t3 = Date.now();
@@ -129,6 +137,7 @@ export class ReceiverWebRTC {
       }
 
       if (dc.label === "chat") {
+        this.chatDc = dc;
         dc.onmessage = (ev) => {
           try {
             const msg: ChatMessage = JSON.parse(ev.data);
@@ -144,11 +153,6 @@ export class ReceiverWebRTC {
     this.pc.onconnectionstatechange = () => {
       if (this.pc?.connectionState === "connected") {
         this.onPeerJoined();
-        // Keep WS alive for a bit in case ICE restarts needed
-        setTimeout(() => this.ws?.close(), 5000);
-
-        // Start clock sync pings
-        this.startPingLoop();
       }
       if (
         this.pc?.connectionState === "disconnected" ||
@@ -159,6 +163,16 @@ export class ReceiverWebRTC {
     };
 
     await this.pc.setRemoteDescription({ type: "offer", sdp });
+    this.remoteSet = true;
+    for (const c of this.pendingCandidates) {
+      try {
+        await this.pc.addIceCandidate(c);
+      } catch (err) {
+        console.error("Failed to add pending ICE candidate", err);
+      }
+    }
+    this.pendingCandidates = [];
+
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
 
@@ -201,12 +215,11 @@ export class ReceiverWebRTC {
   }
 
   sendChat(text: string) {
-    // Basic implementation: send to WS or over a stored DataChannel if we had one.
-    // For now, if the signaller WS is still open, we can send it via WS as peer-message
-    // Since we don't have chatDC explicitly stored, we'll relay via signaller.
-    // StreamSync's desktop host listens to peer WS messages too.
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "chat", text }));
+    const msg = { type: "chat", text };
+    if (this.chatDc?.readyState === "open") {
+      this.chatDc.send(JSON.stringify(msg));
+    } else if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
     }
   }
 

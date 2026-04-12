@@ -55,16 +55,28 @@ export function Session() {
     };
   }, [sessionId, roomUrl]);
 
-  // Listen for magnet-ready from Rust and forward to HostWebRTC
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<{ magnet: string }>("magnet-ready", ({ payload }) => {
-      const fileName = useSessionStore.getState().filePath?.split(/[\\/]/).pop() ?? "video";
-      hostRtcRef.current?.setMagnet(payload.magnet, fileName);
-      useSessionStore.setState({ magnetLink: payload.magnet });
-    }).then((fn) => { unlisten = fn; });
+  // Bind magnet link to HostWebRTC
+  const magnetLink = useSessionStore((s) => s.magnetLink);
+  const filePath = useSessionStore((s) => s.filePath);
 
-    return () => { unlisten?.(); };
+  useEffect(() => {
+    if (magnetLink && hostRtcRef.current) {
+      const fileName = filePath?.split(/[\\/]/).pop() ?? "video";
+      hostRtcRef.current.setMagnet(magnetLink, fileName);
+    }
+  }, [magnetLink, filePath]);
+
+  // Forward host's own chat messages to peers
+  useEffect(() => {
+    const unsub = useSessionStore.subscribe((state, prev) => {
+      if (state.messages.length > prev.messages.length) {
+        const newMsg = state.messages[state.messages.length - 1];
+        if (newMsg.from === state.displayName && hostRtcRef.current) {
+          hostRtcRef.current.broadcastChat(newMsg);
+        }
+      }
+    });
+    return unsub;
   }, []);
 
   // Forward sync state from VideoPlayer to all peers
