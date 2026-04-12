@@ -70,7 +70,7 @@ export function JoinSession() {
           a.length > b.length ? a : b
         );
 
-        file.renderTo(video, { autoplay: true }, (err: Error | null) => {
+        file.renderTo(video, { autoplay: false }, (err: Error | null) => {
           if (err) {
             setError(`Playback error: ${err.message}`);
             setStatus("error");
