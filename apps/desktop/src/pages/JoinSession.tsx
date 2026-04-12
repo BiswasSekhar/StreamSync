@@ -36,7 +36,13 @@ export function JoinSession() {
 
   const roomUrl = useSessionStore((s) => s.joinRoomUrl);
 
-  // Auto-scroll chat
+  useEffect(() => {
+    if (localStream && localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream]);
+
+  // Handle cleanup
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chats]);
@@ -64,6 +70,8 @@ export function JoinSession() {
       }
 
       wtClient = new WebTorrent();
+      console.log("[JoinSession] Adding magnet to WebTorrent:", magnet);
+      
       wtClient.add(magnet, {}, (torrent: any) => {
         // Pick the largest file (the video)
         const file = torrent.files.reduce((a: any, b: any) =>

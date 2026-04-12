@@ -121,8 +121,7 @@ async fn video_stream_handler(
             .min(file_size - 1);
         (start, end, true)
     } else {
-        // No Range header — serve as 206 with first chunk to force range mode
-        (0, STREAM_CHUNK_SIZE.min(file_size) - 1, false)
+        (0, file_size.saturating_sub(1), false)
     };
 
     let chunk_size = end - start + 1;
@@ -150,22 +149,22 @@ async fn video_stream_handler(
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
-    response_headers.insert(header::CONTENT_LENGTH, chunk_size.to_string().parse().unwrap());
     response_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-    response_headers.insert(
-        header::CONTENT_RANGE,
-        format!("bytes {}-{}/{}", start, end, file_size).parse().unwrap(),
-    );
     response_headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
 
-    // Always return 206 Partial Content so the browser knows to use range requests
-    let status = if is_range {
-        StatusCode::PARTIAL_CONTENT
+    if is_range {
+        response_headers.insert(header::CONTENT_LENGTH, chunk_size.to_string().parse().unwrap());
+        response_headers.insert(
+            header::CONTENT_RANGE,
+            format!("bytes {}-{}/{}", start, end, file_size).parse().unwrap(),
+        );
+        (StatusCode::PARTIAL_CONTENT, response_headers, body).into_response()
     } else {
-        StatusCode::PARTIAL_CONTENT // Force 206 even without Range to teach browser
-    };
-
-    (status, response_headers, body).into_response()
+        // If it's a full GET request, we technically should serve the whole file, but we stream the chunk
+        // However, WebTorrent usually only sends Range requests.
+        response_headers.insert(header::CONTENT_LENGTH, chunk_size.to_string().parse().unwrap());
+        (StatusCode::OK, response_headers, body).into_response()
+    }
 }
 
 // ========================================================================
