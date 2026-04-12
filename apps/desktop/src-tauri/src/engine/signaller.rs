@@ -263,11 +263,17 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
                     }
 
                     Some("offer") | Some("answer") | Some("ice-candidate") => {
+                        let signal_type = signal["type"].as_str().unwrap_or("?").to_string();
                         // Relay to target peer
                         let target_id = match signal["peerId"].as_str() {
                             Some(id) => id.to_string(),
-                            None => continue,
+                            None => {
+                                tracing::warn!("Signal {} from {} missing peerId", signal_type, peer_id);
+                                continue;
+                            }
                         };
+
+                        tracing::info!("Relaying {} from {} → {}", signal_type, peer_id, target_id);
 
                         if let Some(room_id) = &current_room {
                             let rooms_lock = rooms.lock().await;
@@ -276,10 +282,16 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
                                     let mut relayed = signal.clone();
                                     relayed["peerId"] = peer_id.clone().into();
                                     let _ = peer.tx.send(Message::Text(relayed.to_string()));
+                                    tracing::info!("Relayed {} to peer {}", signal_type, target_id);
                                 } else {
-                                    tracing::warn!("Target peer {} not found in room {}", target_id, room_id);
+                                    let peer_ids: Vec<&str> = room.iter().map(|p| p.id.as_str()).collect();
+                                    tracing::warn!("Target peer {} not found in room {} (peers: {:?})", target_id, room_id, peer_ids);
                                 }
+                            } else {
+                                tracing::warn!("Room {} not found for relay", room_id);
                             }
+                        } else {
+                            tracing::warn!("Peer {} not in any room, can't relay {}", peer_id, signal_type);
                         }
                     }
 

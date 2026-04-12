@@ -135,10 +135,10 @@ export class JoinWebRTC {
     };
 
     this.pc.onconnectionstatechange = () => {
+      console.log("[JoinWebRTC] Connection state:", this.pc?.connectionState);
       if (this.pc?.connectionState === "connected") {
         this.onConnected();
-        setTimeout(() => this.ws?.close(), 5000);
-        this.startPingLoop();
+        // Keep WebSocket alive — signaller uses it to track room membership
       }
       if (
         this.pc?.connectionState === "disconnected" ||
