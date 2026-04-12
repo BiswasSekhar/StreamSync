@@ -215,7 +215,12 @@ export class ReceiverWebRTC {
   }
 
   sendChat(text: string) {
-    const msg = { type: "chat", text };
+    const msg: ChatMessage = {
+      id: crypto.randomUUID(),
+      from: getDisplayName(),
+      text,
+      timestamp: Date.now(),
+    };
     if (this.chatDc?.readyState === "open") {
       this.chatDc.send(JSON.stringify(msg));
     } else if (this.ws?.readyState === WebSocket.OPEN) {

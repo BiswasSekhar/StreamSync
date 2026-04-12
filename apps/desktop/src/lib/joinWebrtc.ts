@@ -23,6 +23,7 @@ export class JoinWebRTC {
 
   private pendingCandidates: any[] = [];
   private remoteSet = false;
+  private chatDc: RTCDataChannel | null = null;
 
   async connect(roomUrl: string): Promise<MediaStream | null> {
     let fullUrl = roomUrl.trim();
@@ -131,6 +132,7 @@ export class JoinWebRTC {
       }
 
       if (dc.label === "chat") {
+        this.chatDc = dc;
         dc.onmessage = (ev) => {
           try {
             const msg: ChatMessage = JSON.parse(ev.data);
@@ -197,8 +199,16 @@ export class JoinWebRTC {
   }
 
   sendChat(text: string) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "chat", text }));
+    const msg = {
+      id: crypto.randomUUID(),
+      from: getDisplayName(),
+      text,
+      timestamp: Date.now(),
+    };
+    if (this.chatDc?.readyState === "open") {
+      this.chatDc.send(JSON.stringify(msg));
+    } else if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
     }
   }
 

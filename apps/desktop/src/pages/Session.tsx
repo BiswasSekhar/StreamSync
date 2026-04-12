@@ -60,11 +60,16 @@ export function Session() {
   const filePath = useSessionStore((s) => s.filePath);
 
   useEffect(() => {
-    if (magnetLink && hostRtcRef.current) {
+    if (magnetLink && hostRtcRef.current && roomUrl) {
       const fileName = filePath?.split(/[\\/]/).pop() ?? "video";
-      hostRtcRef.current.setMagnet(magnetLink, fileName);
+      
+      const baseUrl = roomUrl.split("?")[0];
+      const wsUrl = baseUrl.endsWith("/") ? baseUrl + "host-video" : baseUrl + "/host-video";
+      const enrichedMagnet = magnetLink + `&ws=${encodeURIComponent(wsUrl)}`;
+
+      hostRtcRef.current.setMagnet(enrichedMagnet, fileName);
     }
-  }, [magnetLink, filePath]);
+  }, [magnetLink, filePath, roomUrl]);
 
   // Forward host's own chat messages to peers
   useEffect(() => {
