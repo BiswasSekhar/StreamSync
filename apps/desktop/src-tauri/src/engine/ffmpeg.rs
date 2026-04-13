@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use crate::state::{AppState, AppEvent, EncodeProgress, HwEncoder};
 
-/// Resolve the path to ffmpeg, ffprobe, or cloudflared.
+/// Resolve the path to a bundled binary (for example ffmpeg or ffprobe).
 /// Checks all known locations in priority order:
 /// 1. TAURI_RESOURCE_DIR env var (set by Tauri at runtime — works for all installs)
 /// 2. Next to the current exe (portable / MSI with dest ".")

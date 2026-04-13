@@ -32,7 +32,7 @@ pub fn run() {
         .manage(current_file.clone())
         .setup(|app| {
             // Expose the Tauri resource dir to resolve_binary() via env var
-            // This is how bundled ffmpeg/ffprobe/cloudflared are found at runtime
+            // This is how bundled ffmpeg/ffprobe binaries are found at runtime
             if let Ok(resource_dir) = app.path().resource_dir() {
                 std::env::set_var("TAURI_RESOURCE_DIR", resource_dir.to_string_lossy().as_ref());
                 tracing::info!("Resource dir: {}", resource_dir.display());

@@ -24,7 +24,7 @@ export function Home() {
   const [roomTimeout, setRoomTimeout] = useState(false);
   const [joinCode, setJoinCode] = useState<string[]>(Array(JOIN_CODE_LENGTH).fill(""));
   const codeInputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  // 20-second timeout while waiting for cloudflared tunnel
+  // 20-second timeout while waiting for room setup
   useEffect(() => {
     if (!creatingRoom) { setRoomTimeout(false); return; }
     const t = setTimeout(() => setRoomTimeout(true), 20_000);
@@ -256,10 +256,10 @@ export function Home() {
               </div>
 
               <p className="landing-footer">
-                Your file never leaves your machine. Encrypted via HTTPS tunnel.
+                Your file never leaves your machine. Signalling is coordinated over Nostr relays.
                 <br />
                 <span className="landing-footer-sub">
-                  Powered by WebRTC, WebTorrent, and Cloudflare Tunnels.
+                  Powered by WebRTC, WebTorrent, and Nostr.
                 </span>
               </p>
             </>
@@ -451,7 +451,7 @@ export function Home() {
                   </button>
                 )}
 
-                {/* Timeout nudge — shown after 20 s of waiting for the cloudflared tunnel */}
+                {/* Timeout nudge — shown after 20 s of waiting for room setup */}
                 {creatingRoom && roomTimeout && (
                   <div className="timeout-nudge">
                     <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
@@ -489,8 +489,8 @@ export function Home() {
                 {(probeResult || isTorrentSource) && !roomUrl && (
                   <p className="home-hint-small">
                     {isTorrentSource
-                      ? "Torrent will stream directly from the global swarm. Viewers join via the room link."
-                      : "Creates a private room via Cloudflare tunnel. Viewers receive the full URL to join."}
+                      ? "Torrent streams from the global swarm. Viewers join with the room code."
+                      : "Creates a private room code. Viewers enter that code to join."}
                   </p>
                 )}
               </div>

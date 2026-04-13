@@ -240,8 +240,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   leaveSession: () => {
     const { roomUrl } = get();
 
-    // If the HOST is leaving (not the joiner), stop the cloudflared tunnel so
-    // the old room is dead and peers don't hang waiting for a host that's gone.
+    // If the host leaves, close the room so peers do not hang waiting for a host
+    // that is no longer present.
     // Fire-and-forget — we don't await so navigation is instant.
     if (roomUrl) {
       invoke("close_room").catch(() => {});

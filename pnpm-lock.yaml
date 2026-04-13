@@ -80,31 +80,31 @@ importers:
     dependencies:
       '@react-navigation/native':
         specifier: ^6.1.0
-        version: 6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+        version: 6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       '@react-navigation/native-stack':
         specifier: ^6.9.0
-        version: 6.11.0(@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native-screens@3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+        version: 6.11.0(@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native-screens@3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       react:
         specifier: 18.2.0
         version: 18.2.0
       react-native:
         specifier: 0.74.0
-        version: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+        version: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
       react-native-safe-area-context:
         specifier: ^4.10.0
-        version: 4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+        version: 4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       react-native-screens:
         specifier: ^3.31.0
-        version: 3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+        version: 3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       react-native-video:
         specifier: ^6.0.0
-        version: 6.19.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+        version: 6.19.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       react-native-webrtc:
         specifier: ^118.0.0
-        version: 118.0.7(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))
+        version: 118.0.7(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))
       react-native-webview:
         specifier: ^13.8.0
-        version: 13.16.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+        version: 13.16.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
     devDependencies:
       '@babel/core':
         specifier: ^7.20.0
@@ -120,13 +120,13 @@ importers:
         version: 0.74.89(eslint@8.57.1)(prettier@3.8.2)(typescript@5.0.4)
       '@react-native/metro-config':
         specifier: ^0.74.0
-        version: 0.74.89(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+        version: 0.74.89(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))
       '@types/react':
         specifier: ^18.2.6
         version: 18.3.28
       '@types/react-native':
         specifier: ^0.73.0
-        version: 0.73.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+        version: 0.73.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
       typescript:
         specifier: 5.0.4
         version: 5.0.4
@@ -6274,7 +6274,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  '@react-native-community/cli-server-api@13.6.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+  '@react-native-community/cli-server-api@13.6.4(bufferutil@4.1.0)':
     dependencies:
       '@react-native-community/cli-debugger-ui': 13.6.4
       '@react-native-community/cli-tools': 13.6.4
@@ -6284,7 +6284,7 @@ snapshots:
       nocache: 3.0.4
       pretty-format: 26.6.2
       serve-static: 1.16.3
-      ws: 7.5.10(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      ws: 7.5.10(bufferutil@4.1.0)
     transitivePeerDependencies:
       - bufferutil
       - encoding
@@ -6311,14 +6311,14 @@ snapshots:
     dependencies:
       joi: 17.13.3
 
-  '@react-native-community/cli@13.6.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+  '@react-native-community/cli@13.6.4(bufferutil@4.1.0)':
     dependencies:
       '@react-native-community/cli-clean': 13.6.4
       '@react-native-community/cli-config': 13.6.4
       '@react-native-community/cli-debugger-ui': 13.6.4
       '@react-native-community/cli-doctor': 13.6.4
       '@react-native-community/cli-hermes': 13.6.4
-      '@react-native-community/cli-server-api': 13.6.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      '@react-native-community/cli-server-api': 13.6.4(bufferutil@4.1.0)
       '@react-native-community/cli-tools': 13.6.4
       '@react-native-community/cli-types': 13.6.4
       chalk: 4.1.2
@@ -6477,16 +6477,16 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@react-native/community-cli-plugin@0.74.81(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+  '@react-native/community-cli-plugin@0.74.81(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(bufferutil@4.1.0)':
     dependencies:
-      '@react-native-community/cli-server-api': 13.6.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      '@react-native-community/cli-server-api': 13.6.4(bufferutil@4.1.0)
       '@react-native-community/cli-tools': 13.6.4
-      '@react-native/dev-middleware': 0.74.81(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      '@react-native/dev-middleware': 0.74.81(bufferutil@4.1.0)
       '@react-native/metro-babel-transformer': 0.74.81(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))
       chalk: 4.1.2
       execa: 5.1.1
-      metro: 0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6)
-      metro-config: 0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      metro: 0.80.12(bufferutil@4.1.0)
+      metro-config: 0.80.12(bufferutil@4.1.0)
       metro-core: 0.80.12
       node-fetch: 2.7.0
       querystring: 0.2.1
@@ -6501,7 +6501,7 @@ snapshots:
 
   '@react-native/debugger-frontend@0.74.81': {}
 
-  '@react-native/dev-middleware@0.74.81(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+  '@react-native/dev-middleware@0.74.81(bufferutil@4.1.0)':
     dependencies:
       '@isaacs/ttlcache': 1.4.1
       '@react-native/debugger-frontend': 0.74.81
@@ -6515,7 +6515,7 @@ snapshots:
       selfsigned: 2.4.1
       serve-static: 1.16.3
       temp-dir: 2.0.0
-      ws: 6.2.3(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      ws: 6.2.3(bufferutil@4.1.0)
     transitivePeerDependencies:
       - bufferutil
       - encoding
@@ -6572,27 +6572,25 @@ snapshots:
       - '@babel/preset-env'
       - supports-color
 
-  '@react-native/metro-config@0.74.89(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(bufferutil@4.1.0)(utf-8-validate@6.0.6)':
+  '@react-native/metro-config@0.74.89(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))':
     dependencies:
       '@react-native/js-polyfills': 0.74.89
       '@react-native/metro-babel-transformer': 0.74.89(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))
-      metro-config: 0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      metro-config: 0.80.12(bufferutil@4.1.0)
       metro-runtime: 0.80.12
     transitivePeerDependencies:
       - '@babel/core'
       - '@babel/preset-env'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.81': {}
 
-  '@react-native/virtualized-lists@0.74.81(@types/react@18.3.28)(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)':
+  '@react-native/virtualized-lists@0.74.81(@types/react@18.3.28)(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)':
     dependencies:
       invariant: 2.2.4
       nullthrows: 1.1.1
       react: 18.2.0
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
     optionalDependencies:
       '@types/react': 18.3.28
 
@@ -6606,31 +6604,31 @@ snapshots:
       react-is: 16.13.1
       use-latest-callback: 0.2.6(react@18.2.0)
 
-  '@react-navigation/elements@1.3.31(@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)':
+  '@react-navigation/elements@1.3.31(@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)':
     dependencies:
-      '@react-navigation/native': 6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+      '@react-navigation/native': 6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       react: 18.2.0
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
-      react-native-safe-area-context: 4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
+      react-native-safe-area-context: 4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
 
-  '@react-navigation/native-stack@6.11.0(@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native-screens@3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)':
+  '@react-navigation/native-stack@6.11.0(@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native-screens@3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)':
     dependencies:
-      '@react-navigation/elements': 1.3.31(@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0))(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
-      '@react-navigation/native': 6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+      '@react-navigation/elements': 1.3.31(@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0))(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
+      '@react-navigation/native': 6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       react: 18.2.0
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
-      react-native-safe-area-context: 4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
-      react-native-screens: 3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
+      react-native-safe-area-context: 4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
+      react-native-screens: 3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       warn-once: 0.1.1
 
-  '@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)':
+  '@react-navigation/native@6.1.18(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)':
     dependencies:
       '@react-navigation/core': 6.4.17(react@18.2.0)
       escape-string-regexp: 4.0.0
       fast-deep-equal: 3.1.3
       nanoid: 3.3.11
       react: 18.2.0
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
 
   '@react-navigation/routers@6.1.9':
     dependencies:
@@ -6930,9 +6928,9 @@ snapshots:
     dependencies:
       '@types/react': 18.3.28
 
-  '@types/react-native@0.73.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)':
+  '@types/react-native@0.73.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)':
     dependencies:
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
     transitivePeerDependencies:
       - '@babel/core'
       - '@babel/preset-env'
@@ -9148,13 +9146,13 @@ snapshots:
       flow-enums-runtime: 0.0.6
       metro-core: 0.80.12
 
-  metro-config@0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  metro-config@0.80.12(bufferutil@4.1.0):
     dependencies:
       connect: 3.7.0
       cosmiconfig: 5.2.1
       flow-enums-runtime: 0.0.6
       jest-validate: 29.7.0
-      metro: 0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      metro: 0.80.12(bufferutil@4.1.0)
       metro-cache: 0.80.12
       metro-core: 0.80.12
       metro-runtime: 0.80.12
@@ -9238,14 +9236,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  metro-transform-worker@0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  metro-transform-worker@0.80.12(bufferutil@4.1.0):
     dependencies:
       '@babel/core': 7.29.0
       '@babel/generator': 7.29.1
       '@babel/parser': 7.29.2
       '@babel/types': 7.29.0
       flow-enums-runtime: 0.0.6
-      metro: 0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      metro: 0.80.12(bufferutil@4.1.0)
       metro-babel-transformer: 0.80.12
       metro-cache: 0.80.12
       metro-cache-key: 0.80.12
@@ -9258,7 +9256,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  metro@0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  metro@0.80.12(bufferutil@4.1.0):
     dependencies:
       '@babel/code-frame': 7.29.0
       '@babel/core': 7.29.0
@@ -9285,7 +9283,7 @@ snapshots:
       metro-babel-transformer: 0.80.12
       metro-cache: 0.80.12
       metro-cache-key: 0.80.12
-      metro-config: 0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      metro-config: 0.80.12(bufferutil@4.1.0)
       metro-core: 0.80.12
       metro-file-map: 0.80.12
       metro-resolver: 0.80.12
@@ -9293,14 +9291,14 @@ snapshots:
       metro-source-map: 0.80.12
       metro-symbolicate: 0.80.12
       metro-transform-plugins: 0.80.12
-      metro-transform-worker: 0.80.12(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      metro-transform-worker: 0.80.12(bufferutil@4.1.0)
       mime-types: 2.1.35
       nullthrows: 1.1.1
       serialize-error: 2.1.0
       source-map: 0.5.7
       strip-ansi: 6.0.1
       throat: 5.0.0
-      ws: 7.5.10(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      ws: 7.5.10(bufferutil@4.1.0)
       yargs: 17.7.2
     transitivePeerDependencies:
       - bufferutil
@@ -9882,10 +9880,10 @@ snapshots:
       minimist: 1.2.8
       strip-json-comments: 2.0.1
 
-  react-devtools-core@5.3.2(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  react-devtools-core@5.3.2(bufferutil@4.1.0):
     dependencies:
       shell-quote: 1.8.3
-      ws: 7.5.10(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      ws: 7.5.10(bufferutil@4.1.0)
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -9906,52 +9904,52 @@ snapshots:
 
   react-is@18.3.1: {}
 
-  react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0):
+  react-native-safe-area-context@4.14.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0):
     dependencies:
       react: 18.2.0
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
 
-  react-native-screens@3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0):
+  react-native-screens@3.37.0(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0):
     dependencies:
       react: 18.2.0
       react-freeze: 1.0.4(react@18.2.0)
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
       warn-once: 0.1.1
 
-  react-native-video@6.19.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0):
+  react-native-video@6.19.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0):
     dependencies:
       react: 18.2.0
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
 
-  react-native-webrtc@118.0.7(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)):
+  react-native-webrtc@118.0.7(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)):
     dependencies:
       base64-js: 1.5.1
       debug: 4.3.4
       event-target-shim: 6.0.2
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
     transitivePeerDependencies:
       - supports-color
 
-  react-native-webview@13.16.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0):
+  react-native-webview@13.16.1(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0):
     dependencies:
       escape-string-regexp: 4.0.0
       invariant: 2.2.4
       react: 18.2.0
-      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6)
+      react-native: 0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)
 
-  react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6):
+  react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0):
     dependencies:
       '@jest/create-cache-key-function': 29.7.0
-      '@react-native-community/cli': 13.6.4(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      '@react-native-community/cli': 13.6.4(bufferutil@4.1.0)
       '@react-native-community/cli-platform-android': 13.6.4
       '@react-native-community/cli-platform-ios': 13.6.4
       '@react-native/assets-registry': 0.74.81
       '@react-native/codegen': 0.74.81(@babel/preset-env@7.29.2(@babel/core@7.29.0))
-      '@react-native/community-cli-plugin': 0.74.81(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      '@react-native/community-cli-plugin': 0.74.81(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(bufferutil@4.1.0)
       '@react-native/gradle-plugin': 0.74.81
       '@react-native/js-polyfills': 0.74.81
       '@react-native/normalize-colors': 0.74.81
-      '@react-native/virtualized-lists': 0.74.81(@types/react@18.3.28)(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0)(utf-8-validate@6.0.6))(react@18.2.0)
+      '@react-native/virtualized-lists': 0.74.81(@types/react@18.3.28)(react-native@0.74.0(@babel/core@7.29.0)(@babel/preset-env@7.29.2(@babel/core@7.29.0))(@types/react@18.3.28)(bufferutil@4.1.0)(react@18.2.0))(react@18.2.0)
       abort-controller: 3.0.0
       anser: 1.4.10
       ansi-regex: 5.0.1
@@ -9970,14 +9968,14 @@ snapshots:
       pretty-format: 26.6.2
       promise: 8.3.0
       react: 18.2.0
-      react-devtools-core: 5.3.2(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      react-devtools-core: 5.3.2(bufferutil@4.1.0)
       react-refresh: 0.14.2
       react-shallow-renderer: 16.15.0(react@18.2.0)
       regenerator-runtime: 0.13.11
       scheduler: 0.24.0-canary-efb381bbf-20230505
       stacktrace-parser: 0.1.11
       whatwg-fetch: 3.6.20
-      ws: 6.2.3(bufferutil@4.1.0)(utf-8-validate@6.0.6)
+      ws: 6.2.3(bufferutil@4.1.0)
       yargs: 17.7.2
     optionalDependencies:
       '@types/react': 18.3.28
@@ -11041,17 +11039,15 @@ snapshots:
       imurmurhash: 0.1.4
       signal-exit: 3.0.7
 
-  ws@6.2.3(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  ws@6.2.3(bufferutil@4.1.0):
     dependencies:
       async-limiter: 1.0.1
     optionalDependencies:
       bufferutil: 4.1.0
-      utf-8-validate: 6.0.6
 
-  ws@7.5.10(bufferutil@4.1.0)(utf-8-validate@6.0.6):
+  ws@7.5.10(bufferutil@4.1.0):
     optionalDependencies:
       bufferutil: 4.1.0
-      utf-8-validate: 6.0.6
 
   ws@8.20.0(bufferutil@4.1.0)(utf-8-validate@6.0.6):
     optionalDependencies:

@@ -64,7 +64,7 @@ export function JoinScreen({ navigation, route }: Props) {
           style={styles.input}
           value={url}
           onChangeText={setUrl}
-          placeholder="https://abc123.trycloudflare.com/?room=..."
+          placeholder="Enter the room link shared by the host"
           placeholderTextColor="#666"
           autoCapitalize="none"
           autoCorrect={false}
