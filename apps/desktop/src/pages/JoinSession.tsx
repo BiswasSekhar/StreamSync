@@ -132,7 +132,7 @@ export function JoinSession() {
     const unlisten = listen("torrent-video-ready", (event: any) => {
       const v = videoRef.current;
       if (!v) return;
-      v.src = "http://asset.localhost/host-video";
+      v.src = "http://localhost:8787/host-video";
       v.oncanplay = () => {
         setStatus("playing");
         if (pendingSyncRef.current && rtcRef.current) {
