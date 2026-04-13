@@ -63,6 +63,13 @@ interface UIState {
 
 type AppView = "home" | "session" | "join";
 
+export interface TorrentProgressInfo {
+  downloadSpeedBps: number;
+  haveBytes: number;
+  totalBytes: number;
+  peerCount: number;
+}
+
 interface SessionStore {
   // Navigation - explicit view state (not derived from sessionId)
   view: AppView;
@@ -71,6 +78,11 @@ interface SessionStore {
   // File state
   filePath: string | null;
   probeResult: VideoProbeResult | null;
+
+  // Torrent-source state (set when host uploads a .torrent file)
+  isTorrentSource: boolean;
+  torrentFileName: string | null;
+  torrentProgress: TorrentProgressInfo | null;
 
   // Encode state
   encodeProgress: EncodeProgress | null;
@@ -105,6 +117,7 @@ interface SessionStore {
 
   // Actions
   setFile: (path: string) => Promise<void>;
+  loadTorrent: (path: string) => Promise<void>;
   createRoom: () => Promise<string>;
   joinRoom: (url: string) => void;
   enterSession: () => void;
@@ -129,6 +142,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   showSettings: false,
   filePath: null,
   probeResult: null,
+  isTorrentSource: false,
+  torrentFileName: null,
+  torrentProgress: null,
   encodeProgress: null,
   encodeComplete: false,
   sessionId: null,
@@ -148,30 +164,65 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   joinRoomUrl: null,
 
   setFile: async (path) => {
+    // Route .torrent files to the dedicated loader
+    const ext = path.split(".").pop()?.toLowerCase();
+    if (ext === "torrent") {
+      await get().loadTorrent(path);
+      return;
+    }
     try {
       const probe = await invoke<VideoProbeResult>("probe_file", { path });
       // Direct seeding — no encode needed, mark ready immediately
-      set({ filePath: path, probeResult: probe, encodeComplete: true, encodeProgress: null });
+      set({
+        filePath: path,
+        probeResult: probe,
+        isTorrentSource: false,
+        torrentFileName: null,
+        torrentProgress: null,
+        encodeComplete: true,
+        encodeProgress: null,
+      });
     } catch (e) {
       get().showToast(`Failed to load file: ${e}`, "error");
     }
   },
 
+  loadTorrent: async (path) => {
+    try {
+      await invoke("load_torrent_file", { path });
+      const torrentFileName = path.split(/[\\/]/).pop() ?? "Unknown torrent";
+      set({
+        filePath: path,
+        probeResult: null,
+        isTorrentSource: true,
+        torrentFileName,
+        torrentProgress: null,
+        encodeComplete: true,   // mark ready so Create Room is enabled
+        encodeProgress: null,
+      });
+      get().showToast("Torrent loading — connecting to swarm...", "info");
+    } catch (e) {
+      get().showToast(`Failed to load torrent: ${e}`, "error");
+    }
+  },
+
   createRoom: async () => {
-    const { filePath } = get();
+    const { filePath, isTorrentSource } = get();
     if (!filePath) throw new Error("No file selected");
 
     try {
-      // 1. Start seeding the original file via librqbit
-      await invoke("start_seeding_original", { path: filePath });
+      if (!isTorrentSource) {
+        // Start seeding the original video file via librqbit
+        await invoke("start_seeding_original", { path: filePath });
+      }
+      // For torrent source, load_torrent_file already kicked off the download+seed
 
-      // 2. Start Cloudflare tunnel + get room URL
-      const url = await invoke<string>("create_room");
-      const sessionId = new URL(url).searchParams.get("room")!;
+      // Create room in backend to get the short code
+      const code = await invoke<string>("create_room");
 
-      set({ roomUrl: url, sessionId, tunnelConnected: true });
-      get().showToast("Room created! Share the link to invite viewers.", "success");
-      return url;
+      set({ roomUrl: code, sessionId: code, tunnelConnected: true });
+      get().showToast("Room created! Share the code to invite viewers.", "success");
+      return code;
     } catch (e) {
       get().showToast(`Failed to create room: ${e}`, "error");
       throw e;
@@ -187,7 +238,29 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   leaveSession: () => {
-    set({ view: "home", joinRoomUrl: null });
+    const { roomUrl } = get();
+
+    // If the HOST is leaving (not the joiner), stop the cloudflared tunnel so
+    // the old room is dead and peers don't hang waiting for a host that's gone.
+    // Fire-and-forget — we don't await so navigation is instant.
+    if (roomUrl) {
+      invoke("close_room").catch(() => {});
+    }
+
+    set({
+      view: "home",
+      joinRoomUrl: null,
+      // Reset all room/session state so the next "Create Watch Party" works
+      roomUrl: null,
+      sessionId: null,
+      peers: [],
+      messages: [],
+      tunnelConnected: false,
+      tunnelUrl: null,
+      magnetLink: null,
+      // Intentionally keep filePath / probeResult / isTorrentSource so the host
+      // doesn't have to re-select the same file when starting a new room.
+    });
   },
 
   play: () => {
@@ -241,6 +314,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       encodeComplete: false,
       filePath: null,
       probeResult: null,
+      isTorrentSource: false,
+      torrentFileName: null,
+      torrentProgress: null,
       tunnelConnected: false,
       tunnelUrl: null,
     });
@@ -340,5 +416,14 @@ export function initEventListeners() {
 
   on<string>("encode-error", ({ payload }) => {
     useSessionStore.getState().showToast(`Encode error: ${payload}`, "error");
+  });
+
+  on<{ fileName: string; filePath: string }>("torrent-video-ready", ({ payload }) => {
+    useSessionStore.setState({ torrentFileName: payload.fileName });
+    useSessionStore.getState().showToast(`Torrent video ready: ${payload.fileName}`, "success");
+  });
+
+  on<TorrentProgressInfo>("torrent-progress", ({ payload }) => {
+    useSessionStore.setState({ torrentProgress: payload });
   });
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useSessionStore } from "../store/session";
 
 interface Props {
@@ -6,20 +6,13 @@ interface Props {
 }
 
 export function RoomLink({ compact = false }: Props) {
-  const { roomUrl, magnetLink, encodeProgress, tunnelConnected } = useSessionStore();
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  // roomUrl now holds the 8-character short code.
+  const { roomUrl, magnetLink, encodeProgress } = useSessionStore();
   const [copied, setCopied] = useState(false);
-  const [showQr, setShowQr] = useState(false);
-
-  useEffect(() => {
-    if (roomUrl && !compact) {
-      generateQR(roomUrl).then(setQrDataUrl).catch(console.error);
-    }
-  }, [roomUrl, compact]);
 
   if (!roomUrl) return null;
 
-  const copyLink = async () => {
+  const copyCode = async () => {
     await navigator.clipboard.writeText(roomUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -30,23 +23,15 @@ export function RoomLink({ compact = false }: Props) {
   if (compact) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {tunnelConnected ? (
-          <span className="badge-ready" style={{ fontSize: 10, padding: "2px 8px" }}>
-            <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#34d399" }} />
-            Live
-          </span>
-        ) : (
-          <span className="badge-error" style={{ fontSize: 10, padding: "2px 8px" }}>Reconnecting…</span>
-        )}
-        <button onClick={copyLink} className="btn-ghost" style={{ fontSize: 11 }}>
-          {copied ? "✓ Copied!" : "Copy link"}
+        <button onClick={copyCode} className="btn-ghost" style={{ fontSize: 11 }}>
+          {copied ? "✓ Copied!" : `Code: ${roomUrl}`}
         </button>
       </div>
     );
   }
 
   return (
-    <div className="surface" style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14, animation: "fadeInUp 0.3s ease-out" }}>
+    <div className="surface" style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16, animation: "fadeInUp 0.3s ease-out", alignItems: "center", textAlign: "center" }}>
       {/* Status */}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         {isReady ? (
@@ -61,52 +46,35 @@ export function RoomLink({ compact = false }: Props) {
             {encodeProgress && ` ${encodeProgress.percent.toFixed(0)}%`}
           </span>
         )}
-        {!tunnelConnected && (
-          <span className="badge-error">Tunnel reconnecting…</span>
-        )}
       </div>
 
-      {/* Link */}
-      <div style={{ display: "flex", gap: 8 }}>
-        <input
-          type="text"
-          readOnly
-          value={roomUrl}
-          style={{ flex: 1, fontFamily: "monospace", fontSize: 11 }}
-          onFocus={(e) => e.target.select()}
-        />
-        <button onClick={copyLink} className="btn-secondary" style={{ whiteSpace: "nowrap" }}>
-          {copied ? (
-            <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <svg width="14" height="14" fill="none" stroke="#34d399" strokeWidth="2.5" viewBox="0 0 24 24">
+      {/* Code Display */}
+      <div>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>
+          Share this Room Code
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, background: "rgba(0,0,0,0.4)", padding: "12px 24px", borderRadius: 16, border: "1px solid rgba(255,255,255,0.05)" }}>
+          <span style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, letterSpacing: 4, color: "#f1f5f9" }}>
+            {roomUrl}
+          </span>
+          <div style={{ width: 1, height: 40, background: "rgba(255,255,255,0.1)", margin: "0 4px" }} />
+          <button onClick={copyCode} className="btn-ghost" style={{ width: 44, height: 44, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {copied ? (
+              <svg width="20" height="20" fill="none" stroke="#34d399" strokeWidth="2.5" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
               </svg>
-              Copied!
-            </span>
-          ) : "Copy"}
-        </button>
-      </div>
-
-      {/* QR + info */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <button onClick={() => setShowQr(!showQr)} className="btn-ghost" style={{ fontSize: 12 }}>
-          {showQr ? "Hide QR" : "📱 Show QR Code"}
-        </button>
-        <span style={{ fontSize: 10, color: "var(--text-muted)" }}>
-          No account or install needed. Link expires when you close StreamSync.
-        </span>
-      </div>
-
-      {showQr && qrDataUrl && (
-        <div style={{ display: "flex", justifyContent: "center", padding: 12, background: "white", borderRadius: 12 }}>
-          <img src={qrDataUrl} alt="Room QR code" width={180} height={180} />
+            ) : (
+              <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            )}
+          </button>
         </div>
-      )}
+      </div>
+      
+      <span style={{ fontSize: 11, color: "var(--text-muted)", maxWidth: 300 }}>
+        Friends can join by opening the StreamSync app and pasting this code.
+      </span>
     </div>
   );
-}
-
-async function generateQR(url: string): Promise<string> {
-  const QRCode = await import("qrcode");
-  return QRCode.default.toDataURL(url, { width: 200, margin: 2, color: { dark: "#1a1a28", light: "#ffffff" } });
 }

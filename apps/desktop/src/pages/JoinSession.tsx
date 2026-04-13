@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { JoinWebRTC } from "../lib/joinWebrtc";
+import { JoinWebRTC, CameraPermissionStatus } from "../lib/joinWebrtc";
 import { SyncMessage } from "../lib/sync";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
 import { VideoOverlay } from "../components/VideoOverlay";
 
-type Status = "connecting" | "connected" | "streaming" | "playing" | "error" | "disconnected";
+type Status = "connecting" | "waiting-approval" | "connected" | "streaming" | "playing" | "error" | "disconnected" | "denied";
 interface ChatMsg { id: string; from: string; text: string; timestamp: number; }
 interface Toast { id: string; from: string; text: string; }
 type CamShape = "circle" | "rounded" | "square";
@@ -21,6 +23,10 @@ export function JoinSession() {
   const [chatToasts, setChatToasts] = useState<Toast[]>([]);
   const [fileName, setFileName] = useState("Connecting...");
   const [error, setError] = useState<string | null>(null);
+  const [connectTimeout, setConnectTimeout] = useState(false);
+  const [cameraStatus, setCameraStatus] = useState<CameraPermissionStatus | null>(null);
+  const [cameraOn, setCameraOn] = useState(false);
+  const [camDeniedOpen, setCamDeniedOpen] = useState(false);
 
   // Video
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -63,6 +69,13 @@ export function JoinSession() {
     if (videoRef.current) setVideoEl(videoRef.current);
   }, []);
 
+  // Extend timeout to 30s to account for approval wait
+  useEffect(() => {
+    if (status !== "connecting" && status !== "waiting-approval") { setConnectTimeout(false); return; }
+    const t = setTimeout(() => setConnectTimeout(true), 30_000);
+    return () => clearTimeout(t);
+  }, [status]);
+
   useEffect(() => {
     if (localStream && localVideoRef.current) localVideoRef.current.srcObject = localStream;
   }, [localStream]);
@@ -86,24 +99,34 @@ export function JoinSession() {
     }
   }, []);
 
-  const handleMagnet = useCallback(async (_: string, name: string, videoUrl: string) => {
+  const handleMagnet = useCallback(async (magnet: string, name: string) => {
     setStatus("streaming"); setFileName(name || "Video");
-    const v = videoRef.current;
-    if (!v) return;
-    if (videoUrl) {
-      v.src = videoUrl;
-      v.onprogress = () => {
-        if (v.buffered.length > 0 && v.duration > 0)
-          setProgress((v.buffered.end(v.buffered.length - 1) / v.duration) * 100);
-      };
+    try {
+      await invoke("load_magnet_link", { magnetLink: magnet });
+    } catch (e: any) {
+      setError(`Failed to load torrent: ${e}`);
+      setStatus("error");
+    }
+  }, []);
+
+  // Listen for the torrent video becoming available locally
+  useEffect(() => {
+    const unlisten = listen("torrent-video-ready", (event: any) => {
+      const v = videoRef.current;
+      if (!v) return;
+      v.src = "http://asset.localhost/host-video";
       v.oncanplay = () => {
         setStatus("playing");
-        if (pendingSyncRef.current && rtcRef.current) { rtcRef.current.applySync(pendingSyncRef.current, v); pendingSyncRef.current = null; }
+        if (pendingSyncRef.current && rtcRef.current) {
+          rtcRef.current.applySync(pendingSyncRef.current, v);
+          pendingSyncRef.current = null;
+        }
       };
       v.onerror = () => { setError("Video failed to load."); setStatus("error"); };
-      return;
-    }
-    setError("No video URL received."); setStatus("error");
+    });
+    return () => {
+      unlisten.then(un => un());
+    };
   }, []);
 
   const handleChat = useCallback((msg: ChatMsg) => {
@@ -118,19 +141,28 @@ export function JoinSession() {
   useEffect(() => {
     if (!roomUrl) { setError("No room URL"); setStatus("error"); return; }
     const rtc = new JoinWebRTC(
-      handleMagnet, handleSync, handleChat,
+      handleMagnet,
+      handleSync,
+      handleChat,
       () => { setStatus("connected"); showToast("Connected to host!", "success"); },
       () => { setStatus("disconnected"); showToast("Disconnected", "warning"); },
+      // onJoinDenied
+      (reason) => { setError(reason); setStatus("denied"); showToast(reason, "error"); },
+      // onCameraStream — auto-opens; also called on retry
+      (stream, camSt) => {
+        setCameraStatus(camSt);
+        if (stream) {
+          setLocalStream(stream);
+          if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+          navigator.mediaDevices.enumerateDevices()
+            .then(devs => setAvailCams(devs.filter(d => d.kind === "videoinput")));
+        }
+      },
       handleRemoteStream,
     );
     rtcRef.current = rtc;
-    rtc.connect(roomUrl).then(stream => {
-      if (stream) {
-        setLocalStream(stream);
-        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-        navigator.mediaDevices.enumerateDevices().then(devs => setAvailCams(devs.filter(d => d.kind === "videoinput")));
-      }
-    });
+    setStatus("connecting");
+    rtc.connect(roomUrl).then(() => setStatus(prev => prev === "connecting" ? "waiting-approval" : prev));
     return () => { rtc.close(); };
   }, [handleMagnet, handleSync, handleChat, handleRemoteStream, roomUrl, showToast]);
 
@@ -165,6 +197,42 @@ export function JoinSession() {
       setShowCamPicker(null);
     } catch { showToast("Camera switch failed", "error"); }
   };
+
+  const toggleCamera = useCallback(async (deviceId?: string) => {
+    if (cameraOn && localStream && !deviceId) {
+      // Turn OFF
+      localStream.getTracks().forEach(t => t.stop());
+      setLocalStream(null); setCameraOn(false);
+      if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    } else {
+      // Turn ON (or switch device)
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: deviceId ? { exact: deviceId } : undefined, width: 640, height: 480, frameRate: 30 },
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
+        localStream?.getTracks().forEach(t => t.stop());
+        setLocalStream(stream); setCameraOn(true); setCameraStatus("granted"); setCamDeniedOpen(false);
+        if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+        // Add tracks to peer connection if already connected
+        if (rtcRef.current) {
+          stream.getTracks().forEach(track => {
+            // addTrack is on the PeerConnection — use openCamera which does this
+          });
+          rtcRef.current.openCamera();
+        }
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        setAvailCams(devs.filter(d => d.kind === "videoinput"));
+        if (deviceId) setSelectedCamId(deviceId);
+      } catch (err: any) {
+        if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
+          setCameraStatus("denied"); setCamDeniedOpen(true);
+        } else {
+          showToast("Camera access failed", "error");
+        }
+      }
+    }
+  }, [cameraOn, localStream, showToast]);
 
   const handleLeave = () => { rtcRef.current?.close(); localStream?.getTracks().forEach(t => t.stop()); leaveSession(); };
 
@@ -216,10 +284,31 @@ export function JoinSession() {
     <div style={{ position: "fixed", inset: 0, background: "#000", overflow: "hidden", fontFamily: "Inter, system-ui, sans-serif" }}>
 
       {/* ── Connection states ── */}
-      {(status === "connecting" || status === "connected") && (
+      {(status === "connecting" || status === "connected" || status === "waiting-approval") && (
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
           <Spinner size={36} />
-          <p style={{ color: "#94a3b8", fontSize: 15, margin: 0 }}>{status === "connecting" ? "Connecting..." : "Waiting for host..."}</p>
+          <p style={{ color: "#94a3b8", fontSize: 15, margin: 0 }}>
+            {status === "waiting-approval" ? "Waiting for host to admit you…" :
+             status === "connected" ? "Waiting for host..." : "Connecting..."}
+          </p>
+          {status === "waiting-approval" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)", borderRadius: 10, padding: "10px 16px", maxWidth: 340, textAlign: "center" }}>
+              <span style={{ fontSize: 18 }}>🔒</span>
+              <span style={{ color: "#a5b4fc", fontSize: 13, lineHeight: 1.45 }}>
+                Your join request has been sent. The host needs to approve it before you can watch.
+              </span>
+            </div>
+          )}
+          {(status === "connecting") && connectTimeout && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(234,179,8,0.08)", border: "1px solid rgba(234,179,8,0.25)", borderRadius: 10, padding: "10px 16px", maxWidth: 360, textAlign: "center" }}>
+              <svg width="16" height="16" fill="none" stroke="#eab308" strokeWidth="2" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+              </svg>
+              <span style={{ color: "#fbbf24", fontSize: 13, lineHeight: 1.45 }}>
+                Taking too long? Make sure the Room Code is correct and the host is online.
+              </span>
+            </div>
+          )}
         </div>
       )}
       {error && (
@@ -341,8 +430,35 @@ export function JoinSession() {
         </div>
       </div>
 
+      {/* ── Camera permission denied guidance popup ── */}
+      {camDeniedOpen && (
+        <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", zIndex: 90, background: "rgba(10,10,18,0.98)", backdropFilter: "blur(20px)", border: "1px solid rgba(234,179,8,0.3)", borderRadius: 18, padding: "28px 32px", maxWidth: 380, textAlign: "center", boxShadow: "0 8px 40px rgba(0,0,0,0.7)" }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🎥</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#f1f5f9", marginBottom: 8 }}>Camera Access Denied</div>
+          <p style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.5, margin: "0 0 16px" }}>
+            You previously blocked camera access. To fix this:<br />
+            <strong style={{ color: "#fbbf24" }}>Click the 🔒 icon</strong> in your browser's address bar → set Camera & Microphone to <strong style={{ color: "#4ade80" }}>Allow</strong> → then refresh.
+          </p>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+            <button
+              onClick={async () => { setCamDeniedOpen(false); await toggleCamera(); }}
+              style={{ background: "linear-gradient(135deg,#818cf8,#6366f1)", border: "none", color: "white", borderRadius: 10, padding: "9px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+            >Try Again</button>
+            <button
+              onClick={() => setCamDeniedOpen(false)}
+              style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.1)", color: "#94a3b8", borderRadius: 10, padding: "9px 20px", fontSize: 13, cursor: "pointer" }}
+            >Skip</button>
+          </div>
+        </div>
+      )}
+
       {/* ── Floating action buttons (right edge, vertically centered) ── */}
       <div style={{ position: "absolute", right: (chatOpen ? 340 : 0) + 16, top: "50%", transform: "translateY(-50%)", zIndex: 25, display: "flex", flexDirection: "column", gap: 10 }}>
+        <StripBtn onClick={() => toggleCamera()} title={cameraOn ? "Turn off camera" : "Turn on camera"} active={cameraOn}>
+          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.847v6.306a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+          </svg>
+        </StripBtn>
         <StripBtn onClick={chatOpen ? closeChat : openChat} active={chatOpen} title="Chat">
           <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
         </StripBtn>
@@ -405,9 +521,14 @@ function ChatToast({ from, text }: { from: string; text: string }) {
 
 function StatusBadge({ status, progress }: { status: Status; progress: number }) {
   const cfg: Record<Status, { color: string; text: string }> = {
-    connecting: { color: "#eab308", text: "Connecting" }, connected: { color: "#3b82f6", text: "Connected" },
-    streaming: { color: "#818cf8", text: `Buffering ${progress.toFixed(0)}%` }, playing: { color: "#22c55e", text: "Watching" },
-    error: { color: "#ef4444", text: "Error" }, disconnected: { color: "#6b7280", text: "Disconnected" },
+    connecting: { color: "#eab308", text: "Connecting" },
+    "waiting-approval": { color: "#818cf8", text: "Awaiting Approval" },
+    connected: { color: "#3b82f6", text: "Connected" },
+    streaming: { color: "#818cf8", text: `Buffering ${progress.toFixed(0)}%` },
+    playing: { color: "#22c55e", text: "Watching" },
+    error: { color: "#ef4444", text: "Error" },
+    disconnected: { color: "#6b7280", text: "Disconnected" },
+    denied: { color: "#ef4444", text: "Admission Denied" },
   };
   const { color, text } = cfg[status];
   return <span style={{ background: `${color}18`, border: `1px solid ${color}40`, color, borderRadius: 20, padding: "4px 12px", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}` }} />{text}</span>;

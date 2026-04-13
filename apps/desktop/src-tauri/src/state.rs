@@ -100,6 +100,12 @@ pub enum AppEvent {
     MagnetReady {
         magnet: String,
     },
+    TorrentProgress {
+        download_speed_bps: u64,
+        have_bytes: u64,
+        total_bytes: u64,
+        peer_count: u32,
+    },
     PeerJoined {
         peer_id: String,
         display_name: String,
@@ -108,10 +114,6 @@ pub enum AppEvent {
         peer_id: String,
     },
     ChatMessage(ChatMessage),
-    TunnelUrl {
-        url: String,
-    },
-    TunnelDisconnected,
     EncodeComplete,
     EncoderFallback {
         encoder: String,
@@ -156,12 +158,12 @@ pub struct TorrentState {
     pub piece_count: u32,
     pub pieces_ready: u32,
     pub upload_speed: u64,
+    pub download_speed: u64,
     pub peer_count: u32,
-}
-
-pub struct TunnelState {
-    pub public_url: String,
-    pub child_pid: Option<u32>,
+    /// true = seeding local file; false = downloading from external torrent
+    pub is_seeder: bool,
+    /// display name of the video file (set for external torrents)
+    pub file_name: Option<String>,
 }
 
 pub struct PeerState {
@@ -182,9 +184,6 @@ pub struct AppState {
     pub encoder: Mutex<EncoderState>,
     pub torrent: Mutex<Option<TorrentState>>,
     pub signaller: Mutex<Option<SignallerState>>,
-    pub tunnel: Mutex<Option<TunnelState>>,
-    pub tunnel_child: Mutex<Option<tokio::process::Child>>,
-    pub tunnel_cancel: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     pub peers: Mutex<HashMap<String, PeerState>>,
     pub event_tx: broadcast::Sender<AppEvent>,
     pub sync_sequence: std::sync::atomic::AtomicU64,
@@ -198,9 +197,6 @@ impl AppState {
             encoder: Mutex::new(EncoderState::default()),
             torrent: Mutex::new(None),
             signaller: Mutex::new(None),
-            tunnel: Mutex::new(None),
-            tunnel_child: Mutex::new(None),
-            tunnel_cancel: Mutex::new(None),
             peers: Mutex::new(HashMap::new()),
             event_tx,
             sync_sequence: std::sync::atomic::AtomicU64::new(0),

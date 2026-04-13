@@ -8,15 +8,15 @@ use tauri::Manager;
 use engine::signaller::CurrentFilePath;
 use tokio::sync::RwLock;
 
-use commands::{file::*, session::*, torrent::*, tunnel::*};
+use commands::{file::*, session::*, torrent::*};
 
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("streamsync=debug".parse().unwrap())
-                .add_directive("librqbit=debug".parse().unwrap())
-                .add_directive("librqbit_core=debug".parse().unwrap()),
+                .add_directive("librqbit=info".parse().unwrap())
+                .add_directive("librqbit_core=info".parse().unwrap()),
         )
         .init();
 
@@ -38,20 +38,13 @@ pub fn run() {
                 tracing::info!("Resource dir: {}", resource_dir.display());
             }
 
-            // Kill any stale cloudflared from previous crashed sessions
-            engine::tunnel::kill_existing_cloudflared();
-
             let cf = app.state::<CurrentFilePath>().inner().clone();
 
             // Start signalling server on background thread
             tauri::async_runtime::spawn(async move {
                 // Find receiver-web dist path
-                let dist_path = find_receiver_web_dist();
-                tracing::info!("Receiver web dist: {:?}", dist_path);
-
                 if let Err(e) = engine::signaller::create_signalling_server(
                     8787,
-                    dist_path,
                     cf,
                 )
                 .await
@@ -84,44 +77,14 @@ pub fn run() {
             probe_file,
             extract_subtitle_command,
             start_seeding_original,
+            load_torrent_file,
             create_room,
             close_room,
             get_session_status,
-            send_host_sync,
-            broadcast_chat,
             get_magnet,
+            load_magnet_link,
             get_torrent_stats,
-            get_tunnel_url,
-            check_cloudflared,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-fn find_receiver_web_dist() -> Option<String> {
-    // Try common locations relative to the binary
-    let candidates = [
-        "../../receiver-web/dist",
-        "../receiver-web/dist",
-        "receiver-web/dist",
-    ];
-
-    for candidate in &candidates {
-        let path = std::path::Path::new(candidate);
-        if path.exists() {
-            return Some(candidate.to_string());
-        }
-    }
-
-    // Try relative to exe
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            let path = parent.join("receiver-web/dist");
-            if path.exists() {
-                return Some(path.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    None
 }

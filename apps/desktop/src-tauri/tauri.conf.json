@@ -1,6 +1,6 @@
 {
   "productName": "StreamSync",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "identifier": "com.streamsync.app",
   "build": {
     "frontendDist": "../dist",
@@ -27,7 +27,7 @@
         "enable": true,
         "scope": ["**"]
       },
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; media-src blob: 'self' asset: http://asset.localhost http://localhost:* http://127.0.0.1:*; connect-src 'self' wss: https: ws: http:; img-src 'self' data: blob: asset: http://asset.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; media-src blob: 'self' asset: http://asset.localhost http://localhost:* http://127.0.0.1:* https:; connect-src 'self' wss: https: ws: http:; img-src 'self' data: blob: asset: http://asset.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'"
     }
   },
   "bundle": {
@@ -35,8 +35,7 @@
     "targets": "all",
     "resources": [
       "resources/ffmpeg.exe",
-      "resources/ffprobe.exe",
-      "resources/cloudflared.exe"
+      "resources/ffprobe.exe"
     ],
     "icon": [
       "icons/32x32.png",

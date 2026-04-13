@@ -53,6 +53,16 @@ pub fn resolve_binary(name: &str) -> String {
     exe
 }
 
+/// Helper to create a new async Command while ensuring console windows are hidden on Windows
+fn get_command(binary: &str) -> tokio::process::Command {
+    let mut cmd = tokio::process::Command::new(binary);
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubtitleStream {
@@ -83,7 +93,7 @@ pub struct VideoProbeResult {
 /// Probe video file using ffprobe (bundled with ffmpeg)
 pub async fn probe_video(path: &str) -> anyhow::Result<VideoProbeResult> {
     let ffprobe = resolve_binary("ffprobe");
-    let output = tokio::process::Command::new(&ffprobe)
+    let output = get_command(&ffprobe)
         .args([
             "-v", "quiet",
             "-print_format", "json",
@@ -205,7 +215,7 @@ fn parse_fps(fps_str: &str) -> f64 {
 /// Extract a specific subtitle stream as WebVTT
 pub async fn extract_subtitle(path: &str, stream_index: usize) -> anyhow::Result<String> {
     let ffmpeg = resolve_binary("ffmpeg");
-    let output = tokio::process::Command::new(&ffmpeg)
+    let output = get_command(&ffmpeg)
         .args([
             "-v", "quiet",
             "-i", path,
@@ -230,7 +240,7 @@ pub async fn detect_hw_encoders() -> anyhow::Result<Vec<HwEncoder>> {
 
     // Check encoders via ffmpeg
     let ffmpeg = resolve_binary("ffmpeg");
-    let output = tokio::process::Command::new(&ffmpeg)
+    let output = get_command(&ffmpeg)
         .args(["-encoders", "-v", "quiet"])
         .output()
         .await
@@ -271,7 +281,7 @@ pub async fn detect_hw_encoders() -> anyhow::Result<Vec<HwEncoder>> {
 async fn test_encoder(name: &str) -> anyhow::Result<()> {
     // Try encoding a single black frame to null to test if encoder works
     let ffmpeg = resolve_binary("ffmpeg");
-    let output = tokio::process::Command::new(&ffmpeg)
+    let output = get_command(&ffmpeg)
         .args([
             "-f", "lavfi",
             "-i", "color=black:s=320x240:d=0.1",
@@ -395,7 +405,7 @@ pub async fn start_encode_pipeline(
     tracing::debug!("FFmpeg args: {:?}", ffmpeg_args);
 
     let ffmpeg = resolve_binary("ffmpeg");
-    let mut child = tokio::process::Command::new(&ffmpeg)
+    let mut child = get_command(&ffmpeg)
         .args(&ffmpeg_args)
         .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())

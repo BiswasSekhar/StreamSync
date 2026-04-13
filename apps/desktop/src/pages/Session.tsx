@@ -3,7 +3,7 @@ import { useSessionStore } from "../store/session";
 import { VideoPlayer } from "../components/VideoPlayer";
 import { VideoOverlay } from "../components/VideoOverlay";
 import { RoomLink } from "../components/RoomLink";
-import { HostWebRTC } from "../lib/hostWebrtc";
+import { HostWebRTC, JoinRequest } from "../lib/hostWebrtc";
 
 interface ChatMsg { id: string; from: string; text: string; timestamp: number; }
 interface Toast { id: string; from: string; text: string; }
@@ -14,6 +14,8 @@ interface CamTile { id: string; label: string; stream: MediaStream | null; isLoc
 export function Session() {
   const { peers, roomUrl, closeRoom, leaveSession, sessionId, showToast, messages, displayName } = useSessionStore();
   const hostRtcRef = useRef<HostWebRTC | null>(null);
+  // Pending join requests (peerId → displayName)
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
 
   // Video element (exposed by VideoPlayer via onVideoRef)
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
@@ -94,11 +96,13 @@ export function Session() {
         addToast(msg.from, msg.text, msg.id);
       },
       (err) => { console.error("[Session]", err); showToast(`WebRTC error: ${err}`, "error"); },
+      // onJoinRequest — add to pending list
+      (req) => setJoinRequests(prev => prev.some(r => r.peerId === req.peerId) ? prev : [...prev, req]),
       handleRemoteStream,
       stableOnPlaybackControl,
     );
     hostRtcRef.current = rtc;
-    rtc.connect(sessionId, displayName || "Host");
+    rtc.connect(sessionId);
 
     // If magnet already exists (e.g. effect re-runs), set it on the new instance immediately
     const store = useSessionStore.getState();
@@ -112,17 +116,15 @@ export function Session() {
     return () => { rtc.close(); hostRtcRef.current = null; };
   }, [sessionId, roomUrl, handleRemoteStream, stableOnPlaybackControl, displayName, addToast, showToast]);
 
-  // Magnet / video URL — send to peers when available
   const magnetLink = useSessionStore(s => s.magnetLink);
   const filePath = useSessionStore(s => s.filePath);
   useEffect(() => {
-    if (magnetLink && hostRtcRef.current && roomUrl) {
+    if (magnetLink && hostRtcRef.current) {
       const fileName = filePath?.split(/[\\/]/).pop() ?? "video";
-      const base = roomUrl.split("?")[0];
-      const videoUrl = base.endsWith("/") ? base + "host-video" : base + "/host-video";
-      hostRtcRef.current.setMagnet(magnetLink, fileName, videoUrl);
+      // No tunnel URL needed — receiver fetches via BitTorrent
+      hostRtcRef.current.setMagnet(magnetLink, fileName, "");
     }
-  }, [magnetLink, filePath, roomUrl]);
+  }, [magnetLink, filePath]);
 
   // Broadcast host play/pause/seek position
   useEffect(() => {
@@ -368,6 +370,33 @@ export function Session() {
           <button onClick={closeRoom} style={btnDanger}>End</button>
         </div>
       </div>
+
+      {/* ── Join-request admission cards ── */}
+      {joinRequests.length > 0 && (
+        <div style={{ position: "absolute", top: 56, right: rightShift + 16, zIndex: 80, display: "flex", flexDirection: "column", gap: 10, maxWidth: 280 }}>
+          {joinRequests.map(req => (
+            <div key={req.peerId} style={{ background: "rgba(15,15,24,0.97)", backdropFilter: "blur(16px)", border: "1px solid rgba(99,102,241,0.35)", borderRadius: 14, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10, boxShadow: "0 4px 24px rgba(0,0,0,0.5)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: "50%", background: "linear-gradient(135deg,#818cf8,#6366f1)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0 }}>👤</div>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#f1f5f9" }}>{req.displayName}</div>
+                  <div style={{ fontSize: 11, color: "#94a3b8" }}>Wants to join</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => { hostRtcRef.current?.approvePeer(req.peerId); setJoinRequests(prev => prev.filter(r => r.peerId !== req.peerId)); }}
+                  style={{ flex: 1, background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.4)", color: "#4ade80", borderRadius: 9, padding: "7px 0", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                >✓ Admit</button>
+                <button
+                  onClick={() => { hostRtcRef.current?.denyPeer(req.peerId); setJoinRequests(prev => prev.filter(r => r.peerId !== req.peerId)); }}
+                  style={{ flex: 1, background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)", color: "#f87171", borderRadius: 9, padding: "7px 0", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                >✕ Deny</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── Floating action buttons (right edge, vertically centered) ── */}
       <div style={{ position: "absolute", right: rightShift + 16, top: "50%", transform: "translateY(-50%)", zIndex: 25, display: "flex", flexDirection: "column", gap: 10 }}>

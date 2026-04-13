@@ -565,6 +565,75 @@ input[type="text"]:focus {
   color: #fbbf24;
 }
 
+/* ── Timeout nudge (host & joiner) ──────────────────────── */
+.timeout-nudge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #fbbf24;
+  line-height: 1.45;
+  animation: fadeInUp 0.4s ease-out;
+}
+.timeout-nudge svg {
+  flex-shrink: 0;
+  color: #eab308;
+}
+
+/* ── Torrent-specific styles ─────────────────────────────── */
+.format-chip.torrent-chip {
+  background: rgba(129, 140, 248, 0.12);
+  border-color: rgba(129, 140, 248, 0.3);
+  color: #a5b4fc;
+}
+.torrent-info-card {
+  border-color: rgba(129, 140, 248, 0.25);
+  background: linear-gradient(135deg, var(--bg-surface), rgba(99, 102, 241, 0.04));
+}
+.torrent-icon {
+  background: rgba(129, 140, 248, 0.1) !important;
+  border-color: rgba(129, 140, 248, 0.2) !important;
+}
+.info-pill.torrent-badge {
+  background: rgba(129, 140, 248, 0.15);
+  border-color: rgba(129, 140, 248, 0.3);
+  color: #a5b4fc;
+  font-weight: 700;
+}
+.info-pill.swarm-connecting {
+  color: #94a3b8;
+  animation: pulse-text 1.8s ease-in-out infinite;
+}
+@keyframes pulse-text {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.45; }
+}
+.torrent-progress-bar-wrap {
+  position: relative;
+  margin-top: 8px;
+  height: 5px;
+  background: var(--bg-elevated);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.torrent-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #818cf8, #6366f1);
+  border-radius: 99px;
+  transition: width 0.6s ease;
+}
+.torrent-progress-label {
+  position: absolute;
+  right: 0;
+  top: -16px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 /* ========== Home Actions ========== */
 .home-actions {
   display: flex;

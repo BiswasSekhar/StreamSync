@@ -1,15 +1,18 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
+import type { TorrentProgressInfo } from "../store/session";
 import { RoomLink } from "../components/RoomLink";
 import { Settings } from "./Settings";
 
 type HomeMode = "landing" | "host" | "join";
+const JOIN_CODE_LENGTH = 8;
 
 export function Home() {
   const {
     setFile, probeResult, filePath,
+    isTorrentSource, torrentFileName, torrentProgress,
     createRoom, roomUrl, sessionId, joinRoom,
     showToast, enterSession,
     showSettings, toggleSettings,
@@ -18,7 +21,15 @@ export function Home() {
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
   const [creatingRoom, setCreatingRoom] = useState(false);
-  const [joinUrl, setJoinUrl] = useState("");
+  const [roomTimeout, setRoomTimeout] = useState(false);
+  const [joinCode, setJoinCode] = useState<string[]>(Array(JOIN_CODE_LENGTH).fill(""));
+  const codeInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  // 20-second timeout while waiting for cloudflared tunnel
+  useEffect(() => {
+    if (!creatingRoom) { setRoomTimeout(false); return; }
+    const t = setTimeout(() => setRoomTimeout(true), 20_000);
+    return () => clearTimeout(t);
+  }, [creatingRoom]);
 
   useEffect(() => {
     // Hardware detection not needed in direct seeding mode
@@ -34,11 +45,11 @@ export function Home() {
         const first = paths[0];
         const ext = first.split(".").pop()?.toLowerCase() ?? "";
         const videoExts = ["mp4", "mkv", "avi", "mov", "ts", "wmv", "flv", "m4v", "webm"];
-        if (videoExts.includes(ext)) {
+        if (ext === "torrent" || videoExts.includes(ext)) {
           if (mode !== "host") setMode("host");
           handleFile(first);
         } else {
-          showToast("Unsupported file type. Drop a video file.", "warning");
+          showToast("Unsupported file type. Drop a video or .torrent file.", "warning");
         }
       }
       setDragging(false);
@@ -76,8 +87,8 @@ export function Home() {
         multiple: false,
         filters: [
           {
-            name: "Video",
-            extensions: ["mp4", "mkv", "avi", "mov", "ts", "wmv", "flv", "m4v", "webm"],
+            name: "Video or Torrent",
+            extensions: ["mp4", "mkv", "avi", "mov", "ts", "wmv", "flv", "m4v", "webm", "torrent"],
           },
         ],
       });
@@ -90,8 +101,8 @@ export function Home() {
   };
 
   const handleCreateRoom = async () => {
-    if (!probeResult) {
-      showToast("Please select a video file first", "warning");
+    if (!probeResult && !isTorrentSource) {
+      showToast("Please select a video or .torrent file first", "warning");
       return;
     }
     setCreatingRoom(true);
@@ -104,10 +115,46 @@ export function Home() {
     }
   };
 
+  const handleCodeChange = (index: number, val: string) => {
+    const char = val.slice(-1).toUpperCase();
+    const newCode = [...joinCode];
+    newCode[index] = char;
+    setJoinCode(newCode);
+
+    if (char && index < JOIN_CODE_LENGTH - 1) {
+      codeInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleCodeKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !joinCode[index] && index > 0) {
+      codeInputRefs.current[index - 1]?.focus();
+    } else if (e.key === "Enter") {
+      handleJoin();
+    } else if (e.key === "ArrowLeft" && index > 0) {
+      codeInputRefs.current[index - 1]?.focus();
+    } else if (e.key === "ArrowRight" && index < JOIN_CODE_LENGTH - 1) {
+      codeInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleCodePaste = (e: React.ClipboardEvent) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData("text").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, JOIN_CODE_LENGTH);
+    if (!pasted) return;
+    const newCode = [...joinCode];
+    for (let i = 0; i < pasted.length; i++) {
+        newCode[i] = pasted[i];
+    }
+    setJoinCode(newCode);
+    const nextIdx = Math.min(pasted.length, JOIN_CODE_LENGTH - 1);
+    codeInputRefs.current[nextIdx]?.focus();
+  };
+
   const handleJoin = () => {
-    const url = joinUrl.trim();
-    if (!url) {
-      showToast("Please paste a room URL or room code", "warning");
+    const url = joinCode.join("");
+    if (url.length !== JOIN_CODE_LENGTH) {
+      showToast(`Please enter the ${JOIN_CODE_LENGTH}-character room code`, "warning");
       return;
     }
     // Join room in-app (no browser needed)
@@ -146,6 +193,7 @@ export function Home() {
                 setMode("landing");
                 useSessionStore.setState({
                   filePath: null, probeResult: null,
+                  isTorrentSource: false, torrentFileName: null, torrentProgress: null,
                   encodeProgress: null, encodeComplete: false,
                   roomUrl: null, sessionId: null,
                 });
@@ -223,23 +271,42 @@ export function Home() {
               <div className="landing-heading">
                 <h1 className="landing-title" style={{ fontSize: 22 }}>Join a Watch Party</h1>
                 <p className="landing-subtitle">
-                  Paste the full room URL shared by the host. It looks like:
-                  <br />
-                  <code className="url-example">https://abc123.trycloudflare.com/?room=uuid</code>
+                  Enter the 8-character room code shared by the host.
                 </p>
               </div>
 
-              <div className="join-input-group">
-                <input
-                  type="text"
-                  value={joinUrl}
-                  onChange={(e) => setJoinUrl(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleJoin()}
-                  placeholder="https://abc123.trycloudflare.com/?room=..."
-                  className="join-input"
-                  autoFocus
-                />
-                <button onClick={handleJoin} className="btn-primary-large">
+              <div className="join-input-group" style={{ flexDirection: "column", alignItems: "center", gap: 24, marginTop: 10 }}>
+                <div style={{ display: "flex", gap: 12, justifyContent: "center" }} onPaste={handleCodePaste}>
+                  {joinCode.map((char, index) => (
+                    <input
+                      key={index}
+                      ref={el => codeInputRefs.current[index] = el}
+                      type="text"
+                      maxLength={1}
+                      value={char}
+                      onChange={e => handleCodeChange(index, e.target.value)}
+                      onKeyDown={e => handleCodeKeyDown(index, e)}
+                      style={{
+                        width: 48,
+                        height: 56,
+                        fontSize: 24,
+                        fontFamily: "monospace",
+                        textAlign: "center",
+                        textTransform: "uppercase",
+                        background: "rgba(0,0,0,0.4)",
+                        border: `1px solid ${char ? "rgba(99,102,241,0.5)" : "rgba(255,255,255,0.1)"}`,
+                        borderRadius: 12,
+                        color: "#f1f5f9",
+                        outline: "none",
+                        transition: "border-color 0.2s, box-shadow 0.2s",
+                        boxShadow: char ? "0 0 10px rgba(99,102,241,0.15)" : "none",
+                      }}
+                      onFocus={e => e.target.select()}
+                      autoFocus={index === 0}
+                    />
+                  ))}
+                </div>
+                <button onClick={handleJoin} className="btn-primary-large" style={{ width: 280 }}>
                   <span className="btn-content">
                     <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
@@ -285,7 +352,7 @@ export function Home() {
               </div>
 
               {/* Drop zone or file info */}
-              {!probeResult ? (
+              {!probeResult && !isTorrentSource ? (
                 <div
                   className={`drop-zone ${dragging ? "dragging" : ""} ${loading ? "loading" : ""}`}
                   onClick={handleBrowse}
@@ -298,18 +365,29 @@ export function Home() {
                     </div>
                     <div>
                       <p className="drop-title">
-                        {loading ? "Analyzing video..." : "Drop your video here"}
+                        {loading ? "Analyzing file..." : "Drop your video or .torrent here"}
                       </p>
                       <p className="drop-subtitle">or click to browse files</p>
                     </div>
                     <div className="drop-formats">
-                      {["MP4", "MKV", "HEVC", "AVI", "MOV", "TS", "WMV", "FLV"].map((f) => (
-                        <span key={f} className="format-chip">{f}</span>
+                      {["MP4", "MKV", "AVI", "MOV", "TS", "WMV", "FLV", "TORRENT"].map((f) => (
+                        <span key={f} className={`format-chip${f === "TORRENT" ? " torrent-chip" : ""}`}>{f}</span>
                       ))}
                     </div>
                   </div>
                 </div>
-              ) : (
+              ) : isTorrentSource ? (
+                <TorrentInfoCard
+                  torrentFileName={torrentFileName}
+                  torrentProgress={torrentProgress}
+                  onClear={() => useSessionStore.setState({
+                    filePath: null, probeResult: null,
+                    isTorrentSource: false, torrentFileName: null, torrentProgress: null,
+                    encodeProgress: null, encodeComplete: false,
+                    roomUrl: null, sessionId: null,
+                  })}
+                />
+              ) : probeResult ? (
                 <div className="file-info-card">
                   <div className="file-info-row">
                     <div className="file-info-icon">
@@ -340,14 +418,14 @@ export function Home() {
                     </button>
                   </div>
                 </div>
-              )}
+              ) : null}
 
               {/* Room link (shown after room is created) */}
               {roomUrl && <RoomLink />}
 
               {/* Action buttons */}
               <div className="home-actions">
-                {probeResult && !roomUrl && (
+                {(probeResult || isTorrentSource) && !roomUrl && (
                   <button
                     onClick={handleCreateRoom}
                     disabled={creatingRoom}
@@ -373,6 +451,16 @@ export function Home() {
                   </button>
                 )}
 
+                {/* Timeout nudge — shown after 20 s of waiting for the cloudflared tunnel */}
+                {creatingRoom && roomTimeout && (
+                  <div className="timeout-nudge">
+                    <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    </svg>
+                    Taking too long? Close the app completely and reopen it, then try again.
+                  </div>
+                )}
+
                 {roomUrl && sessionId && (
                   <button
                     onClick={enterSession}
@@ -388,9 +476,9 @@ export function Home() {
                   </button>
                 )}
 
-                {!probeResult && (
+                {!probeResult && !isTorrentSource && (
                   <p className="home-hint">
-                    Select a video file to start a watch party.
+                    Select a video or drop a .torrent file to start a watch party.
                     <br />
                     <span className="home-hint-sub">
                       Your file never leaves your machine. Fully peer-to-peer.
@@ -398,9 +486,11 @@ export function Home() {
                   </p>
                 )}
 
-                {probeResult && !roomUrl && (
+                {(probeResult || isTorrentSource) && !roomUrl && (
                   <p className="home-hint-small">
-                    Creates a private room via Cloudflare tunnel. Viewers receive the full URL to join.
+                    {isTorrentSource
+                      ? "Torrent will stream directly from the global swarm. Viewers join via the room link."
+                      : "Creates a private room via Cloudflare tunnel. Viewers receive the full URL to join."}
                   </p>
                 )}
               </div>
@@ -409,6 +499,79 @@ export function Home() {
 
         </div>
       </main>
+    </div>
+  );
+}
+
+/* Torrent info card — shown when host uploads a .torrent file */
+function TorrentInfoCard({
+  torrentFileName,
+  torrentProgress,
+  onClear,
+}: {
+  torrentFileName: string | null;
+  torrentProgress: TorrentProgressInfo | null;
+  onClear: () => void;
+}) {
+  const displayName = torrentFileName ?? "Loading torrent…";
+  const haveBytes = torrentProgress?.haveBytes ?? 0;
+  const totalBytes = torrentProgress?.totalBytes ?? 0;
+  const dlSpeed = torrentProgress?.downloadSpeedBps ?? 0;
+  const peers = torrentProgress?.peerCount ?? 0;
+  const percent = totalBytes > 0 ? Math.min(100, Math.round((haveBytes / totalBytes) * 100)) : 0;
+
+  const fmtSpeed = (bps: number) => {
+    if (bps > 1_000_000) return `${(bps / 1_000_000).toFixed(1)} MB/s`;
+    if (bps > 1_000) return `${(bps / 1_000).toFixed(0)} KB/s`;
+    return `${bps} B/s`;
+  };
+
+  const fmtBytes = (b: number) => {
+    if (b > 1e9) return `${(b / 1e9).toFixed(2)} GB`;
+    if (b > 1e6) return `${(b / 1e6).toFixed(1)} MB`;
+    return `${b} B`;
+  };
+
+  return (
+    <div className="file-info-card torrent-info-card">
+      <div className="file-info-row">
+        {/* Torrent icon */}
+        <div className="file-info-icon torrent-icon">
+          <svg width="22" height="22" fill="none" stroke="#818cf8" strokeWidth="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.5 16.5l1.5-1.5M15.5 16.5l-1.5-1.5" />
+          </svg>
+        </div>
+
+        <div className="file-info-meta" style={{ flex: 1, minWidth: 0 }}>
+          <div className="file-info-name" title={displayName}>{displayName}</div>
+          <div className="file-info-details">
+            <span className="info-pill torrent-badge">TORRENT</span>
+            {torrentProgress ? (
+              <>
+                <span className="info-pill">{peers} peer{peers !== 1 ? "s" : ""}</span>
+                <span className="info-pill">{fmtSpeed(dlSpeed)} ↓</span>
+                {totalBytes > 0 && (
+                  <span className="info-pill">{fmtBytes(haveBytes)} / {fmtBytes(totalBytes)}</span>
+                )}
+              </>
+            ) : (
+              <span className="info-pill swarm-connecting">Connecting to swarm…</span>
+            )}
+          </div>
+
+          {/* Download progress bar */}
+          {totalBytes > 0 && (
+            <div className="torrent-progress-bar-wrap">
+              <div className="torrent-progress-bar" style={{ width: `${percent}%` }} />
+              <span className="torrent-progress-label">{percent}%</span>
+            </div>
+          )}
+        </div>
+
+        <button onClick={onClear} className="btn-ghost">Change</button>
+      </div>
     </div>
   );
 }
