@@ -1,4 +1,5 @@
-import { SimplePool, generateSecretKey, getPublicKey, finalizeEvent, type Filter } from 'nostr-tools';
+import { SimplePool, finalizeEvent, type Filter } from "nostr-tools";
+import { getSessionNostrIdentity } from "./nostrIdentity";
 
 export interface SyncState {
   position: number;
@@ -32,10 +33,10 @@ interface PeerChannels {
 }
 
 const RELAYS = [
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.nostr.band',
-  'wss://relay.snort.social',
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.nostr.band",
+  "wss://relay.snort.social",
 ];
 
 const MAX_PEERS = 5;
@@ -51,8 +52,9 @@ export class HostWebRTC {
   private syncSeq = 0;
 
   private pool = new SimplePool();
-  private mySecretKey = generateSecretKey();
-  private myPubkey = getPublicKey(this.mySecretKey);
+  private identity = getSessionNostrIdentity("host");
+  private mySecretKey = this.identity.secretKey;
+  private myPubkey = this.identity.pubkey;
   private roomId: string | null = null;
   private sub: ReturnType<SimplePool['subscribeMany']> | null = null;
 
@@ -192,18 +194,26 @@ export class HostWebRTC {
         const displayName: string = msg.displayName || 'Viewer';
         console.log(`[HostWebRTC] Join request from ${senderPubkey} (${displayName})`);
 
+        if (this.peers.has(senderPubkey)) {
+          return;
+        }
+
         // Auto-deny if room full
         if (this.peers.size >= MAX_PEERS) {
           this.sendSignal({ type: 'join-denied', reason: 'Room is full (max 5 viewers)', target: senderPubkey });
           return;
         }
 
+        const alreadyPending = this.pendingApproval.has(senderPubkey);
         this.pendingApproval.set(senderPubkey, { displayName });
-        this.onJoinRequest({ peerId: senderPubkey, displayName });
+        if (!alreadyPending) {
+          this.onJoinRequest({ peerId: senderPubkey, displayName });
+        }
         break;
       }
 
       case 'leave':
+        this.pendingApproval.delete(senderPubkey);
         this.cleanupPeer(senderPubkey);
         this.onPeerLeft(senderPubkey);
         break;

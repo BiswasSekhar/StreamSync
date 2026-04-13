@@ -89,6 +89,7 @@ export function Session() {
       },
       (peerId) => {
         useSessionStore.setState(s => ({ peers: s.peers.filter(p => p.id !== peerId) }));
+        setJoinRequests(prev => prev.filter(r => r.peerId !== peerId));
         setPeerStreams(prev => { const n = new Map(prev); n.delete(peerId); return n; });
       },
       (msg) => {

@@ -15,7 +15,6 @@ interface FloatPos { x: number; y: number; }
 export function JoinSession() {
   const { leaveSession, showToast } = useSessionStore();
   const [status, setStatus] = useState<Status>("connecting");
-  const [progress, setProgress] = useState(0);
   const [chats, setChats] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatOpen, setChatOpen] = useState(false);
@@ -55,6 +54,25 @@ export function JoinSession() {
   const suppressControlRef = useRef(0);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const roomUrl = useSessionStore(s => s.joinRoomUrl);
+  const torrentProgress = useSessionStore(s => s.torrentProgress);
+
+  const bufferingLabel = useMemo(() => {
+    if (status === "playing") return "Watching";
+    if (status !== "streaming") return "Buffering...";
+    if (!torrentProgress) return "Buffering...";
+
+    if (torrentProgress.totalBytes > 0) {
+      const percent = Math.min(100, (torrentProgress.haveBytes / torrentProgress.totalBytes) * 100);
+      return `Buffering ${percent.toFixed(0)}%`;
+    }
+
+    if (torrentProgress.haveBytes > 0) {
+      const downloadedMb = torrentProgress.haveBytes / (1024 * 1024);
+      return `Buffering ${downloadedMb.toFixed(downloadedMb >= 10 ? 0 : 1)} MB`;
+    }
+
+    return "Buffering...";
+  }, [status, torrentProgress]);
 
   const openChat = useCallback(() => { setChatMounted(true); requestAnimationFrame(() => setChatOpen(true)); }, []);
   const closeChat = useCallback(() => { setChatOpen(false); setTimeout(() => setChatMounted(false), 300); }, []);
@@ -321,7 +339,7 @@ export function JoinSession() {
       )}
       {status === "streaming" && (
         <div style={{ position: "absolute", top: 20, left: "50%", transform: "translateX(-50%)", zIndex: 30, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, padding: "10px 18px", display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "#e2e8f0" }}>
-          <Spinner size={16} /> Buffering {progress.toFixed(0)}%
+          <Spinner size={16} /> {bufferingLabel}
         </div>
       )}
 
@@ -425,7 +443,7 @@ export function JoinSession() {
           <span style={{ fontSize: 12, color: "#94a3b8" }}>{fileName}</span>
         </div>
         <div style={{ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-          <StatusBadge status={status} progress={progress} />
+          <StatusBadge status={status} text={bufferingLabel} />
           <button onClick={handleLeave} style={btnGhost}>← Leave</button>
         </div>
       </div>
@@ -519,19 +537,19 @@ function ChatToast({ from, text }: { from: string; text: string }) {
   );
 }
 
-function StatusBadge({ status, progress }: { status: Status; progress: number }) {
+function StatusBadge({ status, text }: { status: Status; text: string }) {
   const cfg: Record<Status, { color: string; text: string }> = {
     connecting: { color: "#eab308", text: "Connecting" },
     "waiting-approval": { color: "#818cf8", text: "Awaiting Approval" },
     connected: { color: "#3b82f6", text: "Connected" },
-    streaming: { color: "#818cf8", text: `Buffering ${progress.toFixed(0)}%` },
+    streaming: { color: "#818cf8", text },
     playing: { color: "#22c55e", text: "Watching" },
     error: { color: "#ef4444", text: "Error" },
     disconnected: { color: "#6b7280", text: "Disconnected" },
     denied: { color: "#ef4444", text: "Admission Denied" },
   };
-  const { color, text } = cfg[status];
-  return <span style={{ background: `${color}18`, border: `1px solid ${color}40`, color, borderRadius: 20, padding: "4px 12px", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}` }} />{text}</span>;
+  const { color, text: label } = cfg[status];
+  return <span style={{ background: `${color}18`, border: `1px solid ${color}40`, color, borderRadius: 20, padding: "4px 12px", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}` }} />{label}</span>;
 }
 
 function TileCtrlBtn({ children, onClick, title }: { children: React.ReactNode; onClick?: React.MouseEventHandler; title?: string }) {

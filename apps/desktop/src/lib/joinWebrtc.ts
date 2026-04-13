@@ -1,5 +1,6 @@
-import { SimplePool, generateSecretKey, getPublicKey, finalizeEvent, type Filter } from 'nostr-tools';
-import { SyncController, SyncMessage } from './sync';
+import { SimplePool, finalizeEvent, type Filter } from "nostr-tools";
+import { SyncController, SyncMessage } from "./sync";
+import { getSessionNostrIdentity } from "./nostrIdentity";
 
 export interface ChatMessage {
   id: string;
@@ -9,10 +10,10 @@ export interface ChatMessage {
 }
 
 const RELAYS = [
-  'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.nostr.band',
-  'wss://relay.snort.social',
+  "wss://relay.damus.io",
+  "wss://nos.lol",
+  "wss://relay.nostr.band",
+  "wss://relay.snort.social",
 ];
 
 /** Result of requesting camera access */
@@ -33,8 +34,9 @@ export class JoinWebRTC {
   private receivedStreamIds = new Set<string>();
 
   private pool = new SimplePool();
-  private mySecretKey = generateSecretKey();
-  private myPubkey = getPublicKey(this.mySecretKey);
+  private identity = getSessionNostrIdentity("join");
+  private mySecretKey = this.identity.secretKey;
+  private myPubkey = this.identity.pubkey;
   private roomId: string | null = null;
   private sub: ReturnType<SimplePool['subscribeMany']> | null = null;
 
@@ -144,7 +146,11 @@ export class JoinWebRTC {
   }
 
   close() {
-    this.sendSignal({ type: 'leave', target: this.hostPeerId });
+    // In React StrictMode, an eager cleanup can happen before the real session is
+    // established. Avoid sending a stale leave that cancels the surviving join request.
+    if (this.hostPeerId || this.initialOfferResolved) {
+      this.sendSignal({ type: 'leave', target: this.hostPeerId });
+    }
     if (this.sub) this.sub.close();
     this.pool.destroy();
     this.pc?.close();
