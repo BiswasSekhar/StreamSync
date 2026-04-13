@@ -34,12 +34,19 @@ pub async fn load_torrent_file(
 ) -> Result<(), String> {
     let torrent_path = std::path::PathBuf::from(&path);
 
+    {
+        let mut guard = current_file.write().await;
+        *guard = None;
+    }
+
     // Resolve download directory: prefer system Downloads, fall back to temp
     let download_dir = app_handle
         .path()
         .download_dir()
         .unwrap_or_else(|_| std::env::temp_dir())
-        .join("StreamSync");
+        .join("StreamSync")
+        .join("torrent-source")
+        .join(uuid::Uuid::new_v4().to_string());
 
     let state_clone = Arc::clone(&state);
     let current_file_clone = Arc::clone(current_file.inner());

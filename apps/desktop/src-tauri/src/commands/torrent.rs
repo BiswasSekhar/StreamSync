@@ -24,12 +24,19 @@ pub async fn load_magnet_link(
     current_file: tauri::State<'_, crate::engine::signaller::CurrentFilePath>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
+    {
+        let mut guard = current_file.write().await;
+        *guard = None;
+    }
+
     use tauri::Manager;
     let download_dir = app_handle
         .path()
         .download_dir()
         .unwrap_or_else(|_| std::env::temp_dir())
-        .join("StreamSync");
+        .join("StreamSync")
+        .join("receiver")
+        .join(uuid::Uuid::new_v4().to_string());
 
     let state_clone = Arc::clone(&state);
     let current_file_clone = Arc::clone(current_file.inner());

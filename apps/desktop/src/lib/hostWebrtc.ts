@@ -1,4 +1,5 @@
 import { SimplePool, finalizeEvent, type Filter } from "nostr-tools";
+import { SIGNAL_RELAYS } from "./nostrConfig";
 import { getSessionNostrIdentity } from "./nostrIdentity";
 
 export interface SyncState {
@@ -31,13 +32,6 @@ interface PeerChannels {
   pendingCandidates: RTCIceCandidateInit[];
   displayName: string;
 }
-
-const RELAYS = [
-  "wss://relay.damus.io",
-  "wss://nos.lol",
-  "wss://relay.nostr.band",
-  "wss://relay.snort.social",
-];
 
 const MAX_PEERS = 5;
 
@@ -79,7 +73,7 @@ export class HostWebRTC {
     filter['#h'] = [this.roomId!];
 
     this.sub = this.pool.subscribeMany(
-      RELAYS,
+      SIGNAL_RELAYS,
       filter,
       {
         onevent: async (event) => {
@@ -183,7 +177,11 @@ export class HostWebRTC {
       content: JSON.stringify(msg),
     };
     const signed = finalizeEvent(eventTemplate, this.mySecretKey);
-    this.pool.publish(RELAYS, signed);
+    this.pool.publish(SIGNAL_RELAYS, signed).forEach((publishPromise) => {
+      void publishPromise.catch((err: unknown) => {
+        console.warn("[HostWebRTC] Failed to publish signal:", err);
+      });
+    });
   }
 
   private async handleSignal(msg: any, senderPubkey: string) {

@@ -5,6 +5,25 @@ use tauri::Emitter;
 
 use crate::state::{AppState, AppEvent, TorrentState};
 
+const DEFAULT_TRACKERS: &[&str] = &[
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "wss://tracker.webtorrent.dev",
+];
+
+fn default_trackers() -> Vec<String> {
+    DEFAULT_TRACKERS.iter().map(|tracker| (*tracker).to_string()).collect()
+}
+
+fn append_trackers_to_magnet(mut magnet: String) -> String {
+    for tracker in DEFAULT_TRACKERS {
+        magnet.push_str("&tr=");
+        magnet.push_str(&urlencoding::encode(tracker));
+    }
+    magnet
+}
+
 /// Start seeding a completed file as a torrent using librqbit.
 /// Must be called AFTER FFmpeg has finished encoding (file must be complete
 /// for create_torrent to hash all pieces correctly).
@@ -50,14 +69,13 @@ pub async fn start_seeding(
 
     tracing::info!("librqbit session created, adding torrent for seeding");
 
+    let trackers = default_trackers();
     let add_result = session.add_torrent(
         AddTorrent::from_bytes(torrent_bytes),
         Some(AddTorrentOptions {
             only_files: None,
             overwrite: true,
-            // Local seeding for receiver-web uses WebTorrent tracker(s) from magnet URI.
-            // Avoid UDP tracker announces here to reduce noisy timeout logs in desktop environments.
-            trackers: None,
+            trackers: Some(trackers.clone()),
             ..Default::default()
         }),
     ).await
@@ -77,10 +95,10 @@ pub async fn start_seeding(
     let file_name = file_path.file_name().unwrap().to_string_lossy();
     let encoded_name = urlencoding::encode(&file_name);
 
-    let magnet = format!(
-        "magnet:?xt=urn:btih:{}&dn={}&tr=wss%3A%2F%2Ftracker.webtorrent.dev",
+    let magnet = append_trackers_to_magnet(format!(
+        "magnet:?xt=urn:btih:{}&dn={}",
         hash_hex, encoded_name
-    );
+    ));
 
     tracing::info!("Torrent magnet: {}", magnet);
 
@@ -175,10 +193,7 @@ pub async fn load_external_torrent(
             AddTorrent::from_bytes(torrent_bytes),
             Some(AddTorrentOptions {
                 overwrite: true,
-                trackers: Some(vec![
-                    "udp://tracker.opentrackr.org:1337/announce".to_string(),
-                    "udp://open.stealth.si:80/announce".to_string(),
-                ]),
+                trackers: Some(default_trackers()),
                 ..Default::default()
             }),
         )
@@ -196,12 +211,7 @@ pub async fn load_external_torrent(
     let info_hash = handle.info_hash();
     let hash_hex = hex::encode(info_hash.0);
 
-    let magnet = format!(
-        "magnet:?xt=urn:btih:{}\
-         &tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce\
-         &tr=wss%3A%2F%2Ftracker.webtorrent.dev",
-        hash_hex
-    );
+    let magnet = append_trackers_to_magnet(format!("magnet:?xt=urn:btih:{}", hash_hex));
 
     tracing::info!("External torrent magnet: {}", magnet);
 
@@ -248,9 +258,7 @@ pub async fn load_external_torrent(
 
                 {
                     let mut guard = current_file_watch.write().await;
-                    if guard.is_none() {
-                        *guard = Some(path_str.clone());
-                    }
+                    *guard = Some(path_str.clone());
                 }
 
                 // Update torrent state with the discovered file name
@@ -310,10 +318,7 @@ pub async fn load_magnet(
             AddTorrent::from_url(&magnet_link),
             Some(AddTorrentOptions {
                 overwrite: true,
-                trackers: Some(vec![
-                    "udp://tracker.opentrackr.org:1337/announce".to_string(),
-                    "udp://open.stealth.si:80/announce".to_string(),
-                ]),
+                trackers: Some(default_trackers()),
                 ..Default::default()
             }),
         )
@@ -371,9 +376,7 @@ pub async fn load_magnet(
 
                 {
                     let mut guard = current_file_watch.write().await;
-                    if guard.is_none() {
-                        *guard = Some(path_str.clone());
-                    }
+                    *guard = Some(path_str.clone());
                 }
 
                 // Update torrent state with the discovered file name
