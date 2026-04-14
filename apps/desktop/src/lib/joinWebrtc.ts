@@ -1,7 +1,4 @@
-import { SimplePool, finalizeEvent, type Filter } from "nostr-tools";
-import { SIGNAL_RELAYS } from "./nostrConfig";
 import { SyncController, SyncMessage } from "./sync";
-import { getSessionNostrIdentity } from "./nostrIdentity";
 
 export interface ChatMessage {
   id: string;
@@ -45,14 +42,12 @@ export class JoinWebRTC {
   private hostPeerId: string | null = null;
   private receivedStreamIds = new Set<string>();
 
-  private pool = new SimplePool();
-  private identity = getSessionNostrIdentity("join");
-  private mySecretKey = this.identity.secretKey;
-  private myPubkey = this.identity.pubkey;
+  private ws: WebSocket | null = null;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private myPeerId: string | null = null;
   private roomId: string | null = null;
-  private sub: ReturnType<SimplePool['subscribeMany']> | null = null;
 
-  // ICE candidate batching to avoid Nostr rate limits
+  // ICE candidate batching to avoid signalling bursts
   private iceBatchBuffer: RTCIceCandidateInit[] = [];
   private iceBatchTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly ICE_BATCH_DELAY = 300; // ms
@@ -86,41 +81,50 @@ export class JoinWebRTC {
    * Immediately opens camera so it's ready when the host approves.
    */
   async connect(roomId: string): Promise<void> {
-    this.roomId = roomId.trim().toUpperCase();
-    console.log(`[JoinWebRTC] Requesting to join room ${this.roomId}`);
+    const fullUrl = roomId.trim();
+    const url = new URL(fullUrl);
+    const wsBase = fullUrl.split("?")[0];
+    const wsUrl = wsBase.replace(/^https?/, "wss").replace(/^http/, "ws");
+    const wsUrlFixed = wsUrl.endsWith("/") ? wsUrl + "ws" : wsUrl + "/ws";
+    this.roomId = (url.searchParams.get("room") ?? "").trim().toUpperCase();
 
-    const filter: Filter = {
-      kinds: [29999],
-      since: Math.floor(Date.now() / 1000) - 5,
+    this.ws = new WebSocket(wsUrlFixed);
+
+    this.ws.onopen = () => {
+      this.startPingLoop();
+      this.ws?.send(JSON.stringify({
+        type: "join",
+        room: this.roomId,
+        displayName: getDisplayName(),
+      }));
     };
-    filter['#h'] = [this.roomId!];
 
-    this.sub = this.pool.subscribeMany(
-      SIGNAL_RELAYS,
-      filter,
-      {
-        onevent: async (event) => {
-          if (event.pubkey === this.myPubkey) return;
-          try {
-            const msg = JSON.parse(event.content);
-            await this.handleSignal(msg, event.pubkey);
-          } catch (err) {
-            console.warn('[JoinWebRTC] Failed to parse signal:', err);
+    this.ws.onmessage = async (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "room-joined") {
+          this.myPeerId = msg.peerId;
+          const host = (msg.existingPeers ?? [])[0]?.peerId;
+          if (host) {
+            this.hostPeerId = host;
+            if (!this.closed) {
+              this.sendSignal({ type: "join-request", displayName: getDisplayName(), target: this.hostPeerId });
+              this.startJoinRetry();
+            }
           }
-        },
-      },
-    );
+          return;
+        }
+        await this.handleSignal(msg, msg.peerId);
+      } catch (err) {
+        console.warn("[JoinWebRTC] Failed to parse signal:", err);
+      }
+    };
 
-    // Delay the initial join-request by one macrotask so React StrictMode's
-    // synchronous cleanup can set this.closed = true before we publish to Nostr,
-    // preventing a duplicate join-request from the StrictMode phantom mount.
-    await new Promise<void>(resolve => setTimeout(resolve, 50));
-    if (this.closed) return;
+    this.ws.onerror = () => {
+      this.onDisconnected();
+    };
 
-    // Ask host for admission
-    this.sendSignal({ type: 'join-request', displayName: getDisplayName() });
-    // Retry every 15s if host hasn't created the session yet
-    this.startJoinRetry();
+    // Join-request is sent when room-joined arrives and host peer is known.
   }
 
   /**
@@ -194,8 +198,9 @@ export class JoinWebRTC {
     }
     // Flush any pending ICE candidates
     this.flushIceBatch();
-    if (this.sub) this.sub.close();
-    this.pool.destroy();
+    if (this.pingInterval) clearInterval(this.pingInterval);
+    this.ws?.close();
+    this.ws = null;
     this.pc?.close();
     this.localStream?.getTracks().forEach((t) => t.stop());
   }
@@ -221,7 +226,7 @@ export class JoinWebRTC {
           this.MAX_RETRY_DELAY
         );
         console.log(`[JoinWebRTC] Retrying join-request (attempt ${this.joinRetryCount}, next retry in ${delay / 1000}s)...`);
-        this.sendSignal({ type: 'join-request', displayName: getDisplayName() });
+        this.sendSignal({ type: 'join-request', displayName: getDisplayName(), target: this.hostPeerId });
         this.joinRetryTimer = setTimeout(() => this.startJoinRetry(), delay);
       }
     }, this.joinRetryCount === 0 ? this.MIN_RETRY_DELAY : 0);
@@ -229,20 +234,23 @@ export class JoinWebRTC {
 
   // ─── Private ───────────────────────────────────────────────────────────────
 
-  private sendSignal(msg: object) {
-    if (!this.roomId) return;
-    const eventTemplate = {
-      kind: 29999,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [['h', this.roomId]],
-      content: JSON.stringify(msg),
-    };
-    const signed = finalizeEvent(eventTemplate, this.mySecretKey);
-    this.pool.publish(SIGNAL_RELAYS, signed).forEach((publishPromise) => {
-      void publishPromise.catch((err: unknown) => {
-        console.warn("[JoinWebRTC] Failed to publish signal:", err);
-      });
-    });
+  private startPingLoop() {
+    if (this.pingInterval) return;
+    this.pingInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
+      }
+    }, 5000);
+  }
+
+  private sendSignal(msg: Record<string, any>) {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    const payload: Record<string, any> = { ...msg };
+    if (payload.target) {
+      payload.peerId = payload.target;
+      delete payload.target;
+    }
+    this.ws.send(JSON.stringify(payload));
   }
 
   /** Queue an ICE candidate and flush after a short delay */
@@ -252,7 +260,7 @@ export class JoinWebRTC {
     this.iceBatchTimer = setTimeout(() => this.flushIceBatch(target), this.ICE_BATCH_DELAY);
   }
 
-  /** Send all buffered ICE candidates as a single Nostr message */
+  /** Send all buffered ICE candidates as a single signalling message */
   private flushIceBatch(target?: string) {
     if (this.iceBatchBuffer.length === 0) return;
     const candidates = [...this.iceBatchBuffer];
@@ -262,7 +270,7 @@ export class JoinWebRTC {
   }
 
   private async handleSignal(msg: any, senderPubkey: string) {
-    if (msg.target && msg.target !== this.myPubkey) return;
+    if (!senderPubkey) return;
 
     switch (msg.type) {
       case 'join-approved':

@@ -225,12 +225,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       }
       // For torrent source, load_torrent_file already kicked off the download
 
-      // Create room in backend to get the short code
-      const code = await invoke<string>("create_room");
+      // Backend returns full tunnel URL, e.g. https://...trycloudflare.com/?room=ABCDEFGH
+      const roomUrl = await invoke<string>("create_room");
+      const parsed = new URL(roomUrl);
+      const sessionId = (parsed.searchParams.get("room") ?? "").trim().toUpperCase();
 
-      set({ roomUrl: code, sessionId: code, tunnelConnected: true });
-      get().showToast("Room created! Open the session to share the code.", "success");
-      return code;
+      set({ roomUrl, sessionId, tunnelConnected: true, tunnelUrl: parsed.origin });
+      get().showToast("Room created! Open the session to share the URL.", "success");
+      return roomUrl;
     } catch (e) {
       get().showToast(`Failed to create room: ${e}`, "error");
       throw e;
@@ -242,7 +244,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   enterSession: () => {
-    // Reveal the room code only now — host is in session, Nostr listener is active
+    // Reveal the room URL only now, once the host session UI is active.
     set({ view: "session", roomCodeVisible: true });
   },
 

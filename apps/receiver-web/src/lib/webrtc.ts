@@ -1,19 +1,4 @@
-import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, type Filter } from "nostr-tools";
 import { SyncController, SyncMessage } from "./sync";
-
-// Relays known to accept ephemeral event kinds (20000-29999).
-// SimplePool publishes to all simultaneously — more relays = more resilience.
-// DO NOT add relay.primal.net or purplepag.es — they block kind 29999.
-// DO NOT add nostr.wine — requires paid registration to write events.
-const SIGNAL_RELAYS = [
-  "wss://nos.lol",
-  "wss://relay.snort.social",
-  "wss://nostr-pub.wellorder.net",
-  "wss://nostr.oxtr.dev",
-  "wss://nostr.bitcoiner.social",
-  "wss://relay.nostr.wirednet.jp",
-  "wss://nostr.fmt.wiz.biz",
-];
 
 interface ChatMessage {
   id: string;
@@ -38,34 +23,6 @@ export interface ChunkMeta {
   contentRange: string;
 }
 
-// ── Ephemeral Nostr identity (persisted in sessionStorage for the tab lifetime) ──
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function hexToBytes(hex: string): Uint8Array | null {
-  if (hex.length % 2 !== 0) return null;
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    const v = parseInt(hex.slice(i, i + 2), 16);
-    if (isNaN(v)) return null;
-    bytes[i / 2] = v;
-  }
-  return bytes;
-}
-
-function getSessionNostrIdentity() {
-  const KEY = "streamsync_nostr_secret:join";
-  const stored = sessionStorage.getItem(KEY);
-  const parsed = stored ? hexToBytes(stored) : null;
-  const secretKey = parsed && parsed.length === 32 ? parsed : generateSecretKey();
-  if (!parsed || parsed.length !== 32) {
-    sessionStorage.setItem(KEY, bytesToHex(secretKey));
-  }
-  return { secretKey, pubkey: getPublicKey(secretKey) };
-}
-
 export class ReceiverWebRTC {
   private pc: RTCPeerConnection | null = null;
   private syncController = new SyncController();
@@ -79,14 +36,12 @@ export class ReceiverWebRTC {
   private hostPeerId: string | null = null;
   private receivedStreamIds = new Set<string>();
 
-  private pool = new SimplePool();
-  private identity = getSessionNostrIdentity();
-  private mySecretKey = this.identity.secretKey;
-  private myPubkey = this.identity.pubkey;
+  private ws: WebSocket | null = null;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private myPeerId: string | null = null;
   private roomId: string | null = null;
-  private sub: ReturnType<SimplePool["subscribeMany"]> | null = null;
 
-  // ICE batching to reduce Nostr publish rate
+  // ICE batching for websocket signalling
   private iceBatchBuffer: RTCIceCandidateInit[] = [];
   private iceBatchTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly ICE_BATCH_DELAY = 300;
@@ -112,33 +67,45 @@ export class ReceiverWebRTC {
 
   connect(roomCode: string): void {
     this.roomId = roomCode.trim().toUpperCase();
-    console.log(`[ReceiverWebRTC] Requesting to join room ${this.roomId}`);
+    const proto = window.location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${proto}://${window.location.host}/ws`;
+    this.ws = new WebSocket(wsUrl);
 
-    const filter: Filter = {
-      kinds: [29999],
-      since: Math.floor(Date.now() / 1000) - 5,
+    this.ws.onopen = () => {
+      this.startPingLoop();
+      this.ws?.send(JSON.stringify({
+        type: "join",
+        room: this.roomId,
+        displayName: getDisplayName(),
+      }));
     };
-    (filter as any)["#h"] = [this.roomId];
 
-    this.sub = this.pool.subscribeMany(SIGNAL_RELAYS, [filter], {
-      onevent: async (event) => {
-        if (event.pubkey === this.myPubkey) return;
-        try {
-          const msg = JSON.parse(event.content);
-          await this.handleSignal(msg, event.pubkey);
-        } catch (err) {
-          console.warn("[ReceiverWebRTC] Failed to parse signal:", err);
+    this.ws.onmessage = async (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "room-joined") {
+          this.myPeerId = msg.peerId;
+          const host = (msg.existingPeers ?? [])[0]?.peerId;
+          if (host) {
+            this.hostPeerId = host;
+            if (!this.closed) {
+              this.sendSignal({ type: "join-request", displayName: getDisplayName(), target: this.hostPeerId });
+              this.startJoinRetry();
+            }
+          }
+          return;
         }
-      },
-    });
+        await this.handleSignal(msg, msg.peerId);
+      } catch (err) {
+        console.warn("[ReceiverWebRTC] Failed to parse signal:", err);
+      }
+    };
 
-    // Delay the initial join-request by one macrotask so React StrictMode's
-    // synchronous cleanup can set this.closed = true before we publish to Nostr.
-    setTimeout(() => {
-      if (this.closed) return;
-      this.sendSignal({ type: "join-request", displayName: getDisplayName() });
-      this.startJoinRetry();
-    }, 50);
+    this.ws.onerror = () => {
+      this.onDisconnected();
+    };
+
+    // Join-request is sent once room-joined arrives and host peer is known.
   }
 
   requestChunk(start: number, end: number, reqId: string): void {
@@ -172,25 +139,31 @@ export class ReceiverWebRTC {
     if (this.hostPeerId || this.initialOfferResolved) {
       this.sendSignal({ type: "leave", target: this.hostPeerId });
     }
-    if (this.sub) this.sub.close();
-    this.pool.destroy();
+    if (this.pingInterval) clearInterval(this.pingInterval);
+    this.ws?.close();
+    this.ws = null;
     this.pc?.close();
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
 
-  private sendSignal(msg: object): void {
-    if (!this.roomId) return;
-    const eventTemplate = {
-      kind: 29999,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [["h", this.roomId]],
-      content: JSON.stringify(msg),
-    };
-    const signed = finalizeEvent(eventTemplate, this.mySecretKey);
-    this.pool.publish(SIGNAL_RELAYS, signed).forEach((p) =>
-      void p.catch((e: unknown) => console.warn("[ReceiverWebRTC] Publish failed:", e))
-    );
+  private startPingLoop(): void {
+    if (this.pingInterval) return;
+    this.pingInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
+      }
+    }, 5000);
+  }
+
+  private sendSignal(msg: Record<string, any>): void {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    const payload: Record<string, any> = { ...msg };
+    if (payload.target) {
+      payload.peerId = payload.target;
+      delete payload.target;
+    }
+    this.ws.send(JSON.stringify(payload));
   }
 
   private queueIceCandidate(candidate: RTCIceCandidateInit, target: string): void {
@@ -211,14 +184,14 @@ export class ReceiverWebRTC {
     this.joinRetryTimer = setTimeout(() => {
       if (!this.joinApproved) {
         console.log("[ReceiverWebRTC] Retrying join-request...");
-        this.sendSignal({ type: "join-request", displayName: getDisplayName() });
+        this.sendSignal({ type: "join-request", displayName: getDisplayName(), target: this.hostPeerId });
         this.startJoinRetry();
       }
     }, 15_000);
   }
 
   private async handleSignal(msg: any, senderPubkey: string): Promise<void> {
-    if (msg.target && msg.target !== this.myPubkey) return;
+    if (!senderPubkey) return;
 
     switch (msg.type) {
       case "join-approved":

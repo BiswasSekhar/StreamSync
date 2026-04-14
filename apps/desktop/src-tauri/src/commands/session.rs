@@ -3,13 +3,23 @@ use tauri::State;
 
 use crate::state::{AppState, SessionState};
 
+const SIGNALLING_PORT: u16 = 8787;
+
 #[tauri::command]
 pub async fn create_room(
     state: State<'_, Arc<AppState>>,
     _app_handle: tauri::AppHandle,
 ) -> Result<String, String> {
     let session_id = uuid::Uuid::new_v4().to_string().split('-').next().unwrap().to_uppercase();
-    let url_or_code = session_id.clone();
+
+    crate::engine::tunnel::stop_tunnel(&state).await;
+    crate::engine::tunnel::kill_existing_cloudflared();
+
+    let tunnel = crate::engine::tunnel::start_tunnel(SIGNALLING_PORT)
+        .await
+        .map_err(|e| e.to_string())?;
+    let url_or_code = format!("{}/?room={}", tunnel.public_url, session_id);
+    crate::engine::tunnel::set_running_tunnel(&state, tunnel).await;
 
     // Store session state
     {
@@ -29,6 +39,7 @@ pub async fn create_room(
 pub async fn close_room(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    crate::engine::tunnel::stop_tunnel(&state).await;
     let mut sess = state.session.lock().await;
     *sess = None;
     let mut peers = state.peers.lock().await;

@@ -38,13 +38,17 @@ pub fn run() {
                 tracing::info!("Resource dir: {}", resource_dir.display());
             }
 
+            // Avoid stale background tunnel processes after crashes.
+            engine::tunnel::kill_existing_cloudflared();
+
             let cf = app.state::<CurrentFilePath>().inner().clone();
 
             // Start signalling server on background thread
             tauri::async_runtime::spawn(async move {
-                // Find receiver-web dist path
+                let dist_path = find_receiver_web_dist();
                 if let Err(e) = engine::signaller::create_signalling_server(
                     8787,
+                    dist_path,
                     cf,
                 )
                 .await
@@ -88,4 +92,30 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn find_receiver_web_dist() -> Option<String> {
+    let candidates = [
+        "../../receiver-web/dist",
+        "../receiver-web/dist",
+        "receiver-web/dist",
+    ];
+
+    for candidate in &candidates {
+        let path = std::path::Path::new(candidate);
+        if path.exists() {
+            return Some(candidate.to_string());
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let path = parent.join("receiver-web/dist");
+            if path.exists() {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    None
 }

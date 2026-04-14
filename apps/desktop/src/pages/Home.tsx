@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
@@ -6,7 +6,6 @@ import type { TorrentProgressInfo } from "../store/session";
 import { Settings } from "./Settings";
 
 type HomeMode = "landing" | "host" | "join";
-const JOIN_CODE_LENGTH = 8;
 
 export function Home() {
   const {
@@ -23,8 +22,7 @@ export function Home() {
   const [loading, setLoading] = useState(false);
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [roomTimeout, setRoomTimeout] = useState(false);
-  const [joinCode, setJoinCode] = useState<string[]>(Array(JOIN_CODE_LENGTH).fill(""));
-  const codeInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const [joinUrl, setJoinUrl] = useState("");
   // 20-second timeout while waiting for room setup
   useEffect(() => {
     if (!creatingRoom) { setRoomTimeout(false); return; }
@@ -116,46 +114,14 @@ export function Home() {
     }
   };
 
-  const handleCodeChange = (index: number, val: string) => {
-    const char = val.slice(-1).toUpperCase();
-    const newCode = [...joinCode];
-    newCode[index] = char;
-    setJoinCode(newCode);
-
-    if (char && index < JOIN_CODE_LENGTH - 1) {
-      codeInputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleCodeKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Backspace" && !joinCode[index] && index > 0) {
-      codeInputRefs.current[index - 1]?.focus();
-    } else if (e.key === "Enter") {
-      handleJoin();
-    } else if (e.key === "ArrowLeft" && index > 0) {
-      codeInputRefs.current[index - 1]?.focus();
-    } else if (e.key === "ArrowRight" && index < JOIN_CODE_LENGTH - 1) {
-      codeInputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleCodePaste = (e: React.ClipboardEvent) => {
-    e.preventDefault();
-    const pasted = e.clipboardData.getData("text").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, JOIN_CODE_LENGTH);
-    if (!pasted) return;
-    const newCode = [...joinCode];
-    for (let i = 0; i < pasted.length; i++) {
-        newCode[i] = pasted[i];
-    }
-    setJoinCode(newCode);
-    const nextIdx = Math.min(pasted.length, JOIN_CODE_LENGTH - 1);
-    codeInputRefs.current[nextIdx]?.focus();
-  };
-
   const handleJoin = () => {
-    const url = joinCode.join("");
-    if (url.length !== JOIN_CODE_LENGTH) {
-      showToast(`Please enter the ${JOIN_CODE_LENGTH}-character room code`, "warning");
+    const url = joinUrl.trim();
+    if (!url) {
+      showToast("Please paste the room URL", "warning");
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      showToast("Room URL should start with http:// or https://", "warning");
       return;
     }
     // Persist display name for receiver
@@ -259,10 +225,10 @@ export function Home() {
               </div>
 
               <p className="landing-footer">
-                Your file never leaves your machine. Signalling is coordinated over Nostr relays.
+                Your file never leaves your machine. Signalling is coordinated via your private cloudflared tunnel.
                 <br />
                 <span className="landing-footer-sub">
-                  Powered by WebRTC, WebTorrent, and Nostr.
+                  Powered by WebRTC, WebTorrent, and Cloudflare Tunnel.
                 </span>
               </p>
             </>
@@ -274,11 +240,11 @@ export function Home() {
               <div className="landing-heading">
                 <h1 className="landing-title" style={{ fontSize: 22 }}>Join a Watch Party</h1>
                 <p className="landing-subtitle">
-                  Enter the 8-character room code shared by the host.
+                  Paste the room URL shared by the host.
                 </p>
               </div>
 
-              <div className="join-input-group" style={{ flexDirection: "column", alignItems: "center", gap: 24, marginTop: 10 }}>
+              <div className="join-input-group" style={{ flexDirection: "column", alignItems: "center", gap: 18, marginTop: 10 }}>
                 {/* Name input for receiver */}
                 <input
                   type="text"
@@ -288,36 +254,14 @@ export function Home() {
                   maxLength={30}
                   style={{ width: 280, padding: "10px 14px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#f1f5f9", fontSize: 14, outline: "none" }}
                 />
-                <div style={{ display: "flex", gap: 12, justifyContent: "center" }} onPaste={handleCodePaste}>
-                  {joinCode.map((char, index) => (
-                    <input
-                      key={index}
-                      ref={el => codeInputRefs.current[index] = el}
-                      type="text"
-                      maxLength={1}
-                      value={char}
-                      onChange={e => handleCodeChange(index, e.target.value)}
-                      onKeyDown={e => handleCodeKeyDown(index, e)}
-                      style={{
-                        width: 48,
-                        height: 56,
-                        fontSize: 24,
-                        fontFamily: "monospace",
-                        textAlign: "center",
-                        textTransform: "uppercase",
-                        background: "rgba(0,0,0,0.4)",
-                        border: `1px solid ${char ? "rgba(99,102,241,0.5)" : "rgba(255,255,255,0.1)"}`,
-                        borderRadius: 12,
-                        color: "#f1f5f9",
-                        outline: "none",
-                        transition: "border-color 0.2s, box-shadow 0.2s",
-                        boxShadow: char ? "0 0 10px rgba(99,102,241,0.15)" : "none",
-                      }}
-                      onFocus={e => e.target.select()}
-                      autoFocus={index === 0}
-                    />
-                  ))}
-                </div>
+                <input
+                  type="text"
+                  placeholder="https://...trycloudflare.com/?room=ABCDEFGH"
+                  value={joinUrl}
+                  onChange={e => setJoinUrl(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && handleJoin()}
+                  style={{ width: 420, maxWidth: "90vw", padding: "12px 14px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#f1f5f9", fontSize: 13, outline: "none" }}
+                />
                 <button onClick={handleJoin} className="btn-primary-large" style={{ width: 280 }}>
                   <span className="btn-content">
                     <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">

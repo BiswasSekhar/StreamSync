@@ -1,6 +1,4 @@
-import { SimplePool, finalizeEvent, type Filter } from "nostr-tools";
-import { SIGNAL_RELAYS } from "./nostrConfig";
-import { getSessionNostrIdentity } from "./nostrIdentity";
+// WebSocket signalling is handled by the local signaller on port 8787.
 
 export interface SyncState {
   position: number;
@@ -48,12 +46,10 @@ export class HostWebRTC {
   private peerStreams = new Map<string, MediaStream>();
   private syncSeq = 0;
 
-  private pool = new SimplePool();
-  private identity = getSessionNostrIdentity("host");
-  private mySecretKey = this.identity.secretKey;
-  private myPubkey = this.identity.pubkey;
+  private ws: WebSocket | null = null;
+  private myPeerId: string | null = null;
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
   private roomId: string | null = null;
-  private sub: ReturnType<SimplePool['subscribeMany']> | null = null;
 
   constructor(
     private onPeerJoined: (peerId: string, displayName: string) => void,
@@ -67,29 +63,27 @@ export class HostWebRTC {
 
   connect(roomId: string) {
     this.roomId = roomId.trim().toUpperCase();
-    console.log(`[HostWebRTC] Listening on room: ${this.roomId}`);
+    this.ws = new WebSocket("ws://localhost:8787/ws");
 
-    const filter: Filter = {
-      kinds: [29999],
-      since: Math.floor(Date.now() / 1000) - 5,
+    this.ws.onopen = () => {
+      this.startPingLoop();
+      this.ws?.send(JSON.stringify({ type: "join", room: this.roomId, displayName: "Host" }));
     };
-    filter['#h'] = [this.roomId!];
 
-    this.sub = this.pool.subscribeMany(
-      SIGNAL_RELAYS,
-      filter,
-      {
-        onevent: async (event) => {
-          if (event.pubkey === this.myPubkey) return;
-          try {
-            const msg = JSON.parse(event.content);
-            await this.handleSignal(msg, event.pubkey);
-          } catch (err) {
-            console.error('[HostWebRTC] Failed to parse signal', err);
-          }
-        },
-      },
-    );
+    this.ws.onmessage = async (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "room-joined") {
+          this.myPeerId = msg.peerId;
+          return;
+        }
+        await this.handleSignal(msg, msg.peerId);
+      } catch (err) {
+        console.error("[HostWebRTC] Failed to parse signal", err);
+      }
+    };
+
+    this.ws.onerror = () => this.onError("WebSocket signalling connection failed");
   }
 
   /** Host approves a pending join request */
@@ -161,8 +155,9 @@ export class HostWebRTC {
     for (const [peerId, peer] of this.peers) {
       this.flushIceBatch(peerId, peer);
     }
-    if (this.sub) this.sub.close();
-    this.pool.destroy();
+    if (this.pingInterval) clearInterval(this.pingInterval);
+    this.ws?.close();
+    this.ws = null;
     for (const [, peer] of this.peers) {
       peer.pc.close();
     }
@@ -173,20 +168,23 @@ export class HostWebRTC {
 
   // ─── Private ───────────────────────────────────────────────────────────────
 
-  private sendSignal(msg: object) {
-    if (!this.roomId) return;
-    const eventTemplate = {
-      kind: 29999,
-      created_at: Math.floor(Date.now() / 1000),
-      tags: [['h', this.roomId]],
-      content: JSON.stringify(msg),
-    };
-    const signed = finalizeEvent(eventTemplate, this.mySecretKey);
-    this.pool.publish(SIGNAL_RELAYS, signed).forEach((publishPromise) => {
-      void publishPromise.catch((err: unknown) => {
-        console.warn("[HostWebRTC] Failed to publish signal:", err);
-      });
-    });
+  private startPingLoop() {
+    if (this.pingInterval) return;
+    this.pingInterval = setInterval(() => {
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
+      }
+    }, 5000);
+  }
+
+  private sendSignal(msg: Record<string, any>) {
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+    const payload: Record<string, any> = { ...msg };
+    if (payload.target) {
+      payload.peerId = payload.target;
+      delete payload.target;
+    }
+    this.ws.send(JSON.stringify(payload));
   }
 
   /** Queue an ICE candidate for a peer, flush after a delay */
@@ -208,7 +206,7 @@ export class HostWebRTC {
   }
 
   private async handleSignal(msg: any, senderPubkey: string) {
-    if (msg.target && msg.target !== this.myPubkey) return;
+    if (!senderPubkey) return;
 
     switch (msg.type) {
       case 'join-request': {

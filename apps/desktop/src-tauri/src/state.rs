@@ -166,6 +166,11 @@ pub struct TorrentState {
     pub file_name: Option<String>,
 }
 
+pub struct TunnelState {
+    pub public_url: String,
+    pub child_pid: Option<u32>,
+}
+
 pub struct PeerState {
     pub id: String,
     pub display_name: String,
@@ -184,6 +189,8 @@ pub struct AppState {
     pub encoder: Mutex<EncoderState>,
     pub torrent: Mutex<Option<TorrentState>>,
     pub signaller: Mutex<Option<SignallerState>>,
+    pub tunnel: Mutex<Option<TunnelState>>,
+    pub tunnel_child: Mutex<Option<tokio::process::Child>>,
     pub peers: Mutex<HashMap<String, PeerState>>,
     pub event_tx: broadcast::Sender<AppEvent>,
     pub sync_sequence: std::sync::atomic::AtomicU64,
@@ -197,6 +204,8 @@ impl AppState {
             encoder: Mutex::new(EncoderState::default()),
             torrent: Mutex::new(None),
             signaller: Mutex::new(None),
+            tunnel: Mutex::new(None),
+            tunnel_child: Mutex::new(None),
             peers: Mutex::new(HashMap::new()),
             event_tx,
             sync_sequence: std::sync::atomic::AtomicU64::new(0),

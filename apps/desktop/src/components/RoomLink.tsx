@@ -6,7 +6,6 @@ interface Props {
 }
 
 export function RoomLink({ compact = false }: Props) {
-  // roomUrl now holds the 8-character short code.
   const { roomUrl, magnetLink, encodeProgress } = useSessionStore();
   const [copied, setCopied] = useState(false);
 
@@ -24,7 +23,7 @@ export function RoomLink({ compact = false }: Props) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button onClick={copyCode} className="btn-ghost" style={{ fontSize: 11 }}>
-          {copied ? "✓ Copied!" : `Code: ${roomUrl}`}
+          {copied ? "✓ Copied!" : "Copy Room URL"}
         </button>
       </div>
     );
@@ -51,13 +50,13 @@ export function RoomLink({ compact = false }: Props) {
       {/* Code Display */}
       <div>
         <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>
-          Share this Room Code
+          Share this Room URL
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, background: "rgba(0,0,0,0.4)", padding: "12px 24px", borderRadius: 16, border: "1px solid rgba(255,255,255,0.05)" }}>
-          <span style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, letterSpacing: 4, color: "#f1f5f9" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, background: "rgba(0,0,0,0.4)", padding: "12px 16px", borderRadius: 16, border: "1px solid rgba(255,255,255,0.05)", maxWidth: 620 }}>
+          <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 600, color: "#f1f5f9", wordBreak: "break-all" }}>
             {roomUrl}
           </span>
-          <div style={{ width: 1, height: 40, background: "rgba(255,255,255,0.1)", margin: "0 4px" }} />
+          <div style={{ width: 1, height: 40, background: "rgba(255,255,255,0.1)", margin: "0 2px" }} />
           <button onClick={copyCode} className="btn-ghost" style={{ width: 44, height: 44, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
             {copied ? (
               <svg width="20" height="20" fill="none" stroke="#34d399" strokeWidth="2.5" viewBox="0 0 24 24">
@@ -73,7 +72,7 @@ export function RoomLink({ compact = false }: Props) {
       </div>
       
       <span style={{ fontSize: 11, color: "var(--text-muted)", maxWidth: 300 }}>
-        Friends can join by opening the StreamSync app and pasting this code.
+        Friends can join by opening the URL in a browser or pasting it in StreamSync desktop.
       </span>
     </div>
   );
