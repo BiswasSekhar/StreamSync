@@ -7,9 +7,12 @@ use crate::state::{AppState, AppEvent, TorrentState};
 
 const DEFAULT_TRACKERS: &[&str] = &[
     "udp://tracker.opentrackr.org:1337/announce",
+    "udp://tracker.internetwarriors.net:1337/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://tracker.cyberia.is:6969/announce",
+    "http://tracker.openbittorrent.com:80/announce",
     "udp://open.stealth.si:80/announce",
     "udp://tracker.torrent.eu.org:451/announce",
-    "wss://tracker.webtorrent.dev",
 ];
 
 fn default_trackers() -> Vec<String> {
@@ -59,8 +62,6 @@ pub async fn start_seeding(
     // DHT often fails inside desktop apps (port conflicts, firewall) and kills the session.
     // We rely on WebTorrent trackers for peer discovery instead.
     let mut opts = SessionOptions::default();
-    opts.disable_dht = true;
-    opts.disable_dht_persistence = true;
     opts.listen_port_range = Some(6881..65535);
 
     let session = Session::new_with_opts(output_dir, opts)
@@ -304,8 +305,6 @@ pub async fn load_magnet(
     tracing::info!("Loading magnet link into: {:?}", download_dir);
 
     let mut opts = SessionOptions::default();
-    opts.disable_dht = true;
-    opts.disable_dht_persistence = true;
     opts.listen_port_range = Some(6881..65535);
 
     let session = Session::new_with_opts(download_dir.clone(), opts)
