@@ -34,6 +34,11 @@ export class JoinWebRTC {
   private roomId: string | null = null;
   private sub: ReturnType<SimplePool['subscribeMany']> | null = null;
 
+  // ICE candidate batching to avoid Nostr rate limits
+  private iceBatchBuffer: RTCIceCandidateInit[] = [];
+  private iceBatchTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly ICE_BATCH_DELAY = 300; // ms
+
   constructor(
     private onMagnet: (magnet: string, fileName: string, videoUrl: string) => void,
     private onSync: (sync: SyncMessage) => void,
@@ -145,6 +150,8 @@ export class JoinWebRTC {
     if (this.hostPeerId || this.initialOfferResolved) {
       this.sendSignal({ type: 'leave', target: this.hostPeerId });
     }
+    // Flush any pending ICE candidates
+    this.flushIceBatch();
     if (this.sub) this.sub.close();
     this.pool.destroy();
     this.pc?.close();
@@ -167,6 +174,22 @@ export class JoinWebRTC {
         console.warn("[JoinWebRTC] Failed to publish signal:", err);
       });
     });
+  }
+
+  /** Queue an ICE candidate and flush after a short delay */
+  private queueIceCandidate(candidate: RTCIceCandidateInit, target: string) {
+    this.iceBatchBuffer.push(candidate);
+    if (this.iceBatchTimer) clearTimeout(this.iceBatchTimer);
+    this.iceBatchTimer = setTimeout(() => this.flushIceBatch(target), this.ICE_BATCH_DELAY);
+  }
+
+  /** Send all buffered ICE candidates as a single Nostr message */
+  private flushIceBatch(target?: string) {
+    if (this.iceBatchBuffer.length === 0) return;
+    const candidates = [...this.iceBatchBuffer];
+    this.iceBatchBuffer = [];
+    if (this.iceBatchTimer) { clearTimeout(this.iceBatchTimer); this.iceBatchTimer = null; }
+    this.sendSignal({ type: 'ice-candidates', candidates, target: target ?? this.hostPeerId });
   }
 
   private async handleSignal(msg: any, senderPubkey: string) {
@@ -205,6 +228,19 @@ export class JoinWebRTC {
             } catch {}
           } else {
             this.pendingCandidates.push(msg.candidate);
+          }
+        }
+        break;
+
+      // Batched ICE candidates from host
+      case 'ice-candidates':
+        if (senderPubkey === this.hostPeerId && Array.isArray(msg.candidates)) {
+          for (const candidate of msg.candidates) {
+            if (this.remoteSet && this.pc) {
+              try { await this.pc.addIceCandidate(candidate); } catch {}
+            } else {
+              this.pendingCandidates.push(candidate);
+            }
           }
         }
         break;
@@ -289,11 +325,7 @@ export class JoinWebRTC {
 
     this.pc.onicecandidate = (e) => {
       if (e.candidate) {
-        this.sendSignal({
-          type: 'ice-candidate',
-          candidate: e.candidate.toJSON(),
-          target: hostPeerId,
-        });
+        this.queueIceCandidate(e.candidate.toJSON(), hostPeerId);
       }
     };
   }

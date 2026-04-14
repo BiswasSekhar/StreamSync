@@ -31,9 +31,13 @@ interface PeerChannels {
   remoteSet: boolean;
   pendingCandidates: RTCIceCandidateInit[];
   displayName: string;
+  // ICE batching per-peer
+  iceBatchBuffer: RTCIceCandidateInit[];
+  iceBatchTimer: ReturnType<typeof setTimeout> | null;
 }
 
 const MAX_PEERS = 5;
+const ICE_BATCH_DELAY = 300; // ms
 
 export class HostWebRTC {
   private peers = new Map<string, PeerChannels>();
@@ -156,6 +160,10 @@ export class HostWebRTC {
 
   close() {
     this.sendSignal({ type: 'leave' });
+    // Flush all pending ICE batches
+    for (const [peerId, peer] of this.peers) {
+      this.flushIceBatch(peerId, peer);
+    }
     if (this.sub) this.sub.close();
     this.pool.destroy();
     for (const [, peer] of this.peers) {
@@ -182,6 +190,24 @@ export class HostWebRTC {
         console.warn("[HostWebRTC] Failed to publish signal:", err);
       });
     });
+  }
+
+  /** Queue an ICE candidate for a peer, flush after a delay */
+  private queueIceCandidate(peerId: string, candidate: RTCIceCandidateInit) {
+    const peer = this.peers.get(peerId);
+    if (!peer) return;
+    peer.iceBatchBuffer.push(candidate);
+    if (peer.iceBatchTimer) clearTimeout(peer.iceBatchTimer);
+    peer.iceBatchTimer = setTimeout(() => this.flushIceBatch(peerId, peer), ICE_BATCH_DELAY);
+  }
+
+  /** Send all buffered ICE candidates for a peer as a single message */
+  private flushIceBatch(peerId: string, peer: PeerChannels) {
+    if (peer.iceBatchBuffer.length === 0) return;
+    const candidates = [...peer.iceBatchBuffer];
+    peer.iceBatchBuffer = [];
+    if (peer.iceBatchTimer) { clearTimeout(peer.iceBatchTimer); peer.iceBatchTimer = null; }
+    this.sendSignal({ type: 'ice-candidates', candidates, target: peerId });
   }
 
   private async handleSignal(msg: any, senderPubkey: string) {
@@ -227,6 +253,15 @@ export class HostWebRTC {
       case 'ice-candidate':
         await this.handleIceCandidate(senderPubkey, msg.candidate);
         break;
+
+      // Batched ICE candidates from joiner
+      case 'ice-candidates':
+        if (Array.isArray(msg.candidates)) {
+          for (const candidate of msg.candidates) {
+            await this.handleIceCandidate(senderPubkey, candidate);
+          }
+        }
+        break;
     }
   }
 
@@ -267,6 +302,8 @@ export class HostWebRTC {
       videoTransceiver, audioTransceiver,
       remoteSet: false, pendingCandidates: [],
       displayName,
+      iceBatchBuffer: [],
+      iceBatchTimer: null,
     };
     this.peers.set(peerId, peerChannels);
 
@@ -295,7 +332,7 @@ export class HostWebRTC {
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        this.sendSignal({ type: 'ice-candidate', candidate: e.candidate.toJSON(), target: peerId });
+        this.queueIceCandidate(peerId, e.candidate.toJSON());
       }
     };
 
@@ -420,6 +457,7 @@ export class HostWebRTC {
   private cleanupPeer(peerId: string) {
     const peer = this.peers.get(peerId);
     if (peer) {
+      if (peer.iceBatchTimer) clearTimeout(peer.iceBatchTimer);
       peer.pc.close();
       this.peers.delete(peerId);
     }
