@@ -1,12 +1,17 @@
 import { SimplePool, finalizeEvent, generateSecretKey, getPublicKey, type Filter } from "nostr-tools";
 import { SyncController, SyncMessage } from "./sync";
 
-// Relays that support ephemeral event kinds (20000-29999).
-// relay.primal.net and purplepag.es block kind 29999 — do NOT use them.
+// Relays known to accept ephemeral event kinds (20000-29999).
+// SimplePool publishes to all simultaneously — more relays = more resilience.
+// DO NOT add relay.primal.net or purplepag.es — they block kind 29999.
 const SIGNAL_RELAYS = [
-  "wss://relay.nostr.band",
   "wss://nos.lol",
-  "wss://relay.damus.io",
+  "wss://relay.snort.social",
+  "wss://nostr.wine",
+  "wss://nostr-pub.wellorder.net",
+  "wss://relayable.org",
+  "wss://nostr.oxtr.dev",
+  "wss://relay.nostr.band",
 ];
 
 interface ChatMessage {

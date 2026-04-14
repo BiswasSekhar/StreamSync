@@ -1,7 +1,12 @@
-// Relays that explicitly support ephemeral event kinds (20000-29999).
-// relay.primal.net and purplepag.es block kind 29999 — do NOT use them.
+// Relays known to accept ephemeral event kinds (20000-29999).
+// SimplePool publishes to all simultaneously — more relays = more resilience.
+// DO NOT add relay.primal.net or purplepag.es — they block kind 29999.
 export const SIGNAL_RELAYS = [
-  "wss://relay.nostr.band",   // reliable, all NIPs including ephemeral
-  "wss://nos.lol",             // good throughput
-  "wss://relay.damus.io",      // original relay, supports ephemeral
+  "wss://nos.lol",
+  "wss://relay.snort.social",
+  "wss://nostr.wine",
+  "wss://nostr-pub.wellorder.net",
+  "wss://relayable.org",
+  "wss://nostr.oxtr.dev",
+  "wss://relay.nostr.band",
 ];
