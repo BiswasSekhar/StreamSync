@@ -26,6 +26,7 @@ interface PeerChannels {
   controlDc: RTCDataChannel | null;
   syncDc: RTCDataChannel | null;
   chatDc: RTCDataChannel | null;
+  mediaDc: RTCDataChannel | null;
   videoTransceiver: RTCRtpTransceiver;
   audioTransceiver: RTCRtpTransceiver;
   remoteSet: boolean;
@@ -287,6 +288,8 @@ export class HostWebRTC {
     const controlDc = pc.createDataChannel('control', { ordered: true });
     const syncDc = pc.createDataChannel('sync', { ordered: false, maxRetransmits: 0 });
     const chatDc = pc.createDataChannel('chat', { ordered: true });
+    const mediaDc = pc.createDataChannel('media', { ordered: true });
+    mediaDc.binaryType = 'arraybuffer';
 
     syncDc.onmessage = (e) => {
       try {
@@ -298,7 +301,7 @@ export class HostWebRTC {
     };
 
     const peerChannels: PeerChannels = {
-      pc, controlDc, syncDc, chatDc,
+      pc, controlDc, syncDc, chatDc, mediaDc,
       videoTransceiver, audioTransceiver,
       remoteSet: false, pendingCandidates: [],
       displayName,
@@ -312,6 +315,39 @@ export class HostWebRTC {
       try {
         this.onChat(JSON.parse(e.data));
       } catch {}
+    };
+
+    mediaDc.onmessage = async (e) => {
+      try {
+        // Parse the request from receiver's Service Worker
+        const req = JSON.parse(e.data);
+        if (req.type === 'WEBRTC_CHUNK_REQUEST' && this.videoUrl) {
+          const headers: HeadersInit = {};
+          if (req.range) {
+            headers['Range'] = req.range;
+          }
+          
+          // Request from local Axum server
+          const response = await fetch("http://localhost:8787/host-video", { headers });
+          if (!response.ok && response.status !== 206) {
+             mediaDc.send(JSON.stringify({ type: 'WEBRTC_CHUNK_ERROR', reqId: req.reqId }));
+             return;
+          }
+          
+          const arrayBuffer = await response.arrayBuffer();
+          // Send metadata exactly before sending the binary
+          mediaDc.send(JSON.stringify({
+             type: 'WEBRTC_CHUNK_RESPONSE',
+             reqId: req.reqId,
+             totalSize: response.headers.get('Content-Range')?.split('/')[1] || arrayBuffer.byteLength,
+             contentType: response.headers.get('Content-Type') || 'video/mp4'
+          }));
+          // Send binary payload
+          mediaDc.send(arrayBuffer);
+        }
+      } catch (err) {
+        console.error('[HostWebRTC] Failed to handle mediaDc message', err);
+      }
     };
 
     const seenStreams = new Set<string>();

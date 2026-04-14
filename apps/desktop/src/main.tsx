@@ -7,6 +7,12 @@ import { initEventListeners } from "./store/session";
 // Set up Tauri event listeners
 initEventListeners();
 
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js')
+    .then((reg) => console.log('ServiceWorker registered:', reg.scope))
+    .catch((err) => console.log('ServiceWorker registration failed:', err));
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />

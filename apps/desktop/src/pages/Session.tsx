@@ -122,8 +122,8 @@ export function Session() {
   useEffect(() => {
     if (magnetLink && hostRtcRef.current) {
       const fileName = filePath?.split(/[\\/]/).pop() ?? "video";
-      // No tunnel URL needed — receiver fetches via BitTorrent
-      hostRtcRef.current.setMagnet(magnetLink, fileName, "");
+      // Pass the local axum streaming URL so the WebRTC proxy is authorized to fetch it
+      hostRtcRef.current.setMagnet(magnetLink, fileName, "http://localhost:8787/host-video");
     }
   }, [magnetLink, filePath]);
 

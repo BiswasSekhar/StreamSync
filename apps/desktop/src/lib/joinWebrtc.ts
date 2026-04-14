@@ -21,6 +21,9 @@ export class JoinWebRTC {
   private remoteSet = false;
   private chatDc: RTCDataChannel | null = null;
   private syncDcRef: RTCDataChannel | null = null;
+  private mediaDcRef: RTCDataChannel | null = null;
+  private currentMediaMeta: any = null;
+  private swMessageListener: ((ev: MessageEvent) => void) | null = null;
   
   public localStream: MediaStream | null = null;
   private initialOfferResolved = false;
@@ -48,7 +51,20 @@ export class JoinWebRTC {
     private onJoinDenied: (reason: string) => void,
     private onCameraStream: (stream: MediaStream | null, status: CameraPermissionStatus) => void = () => {},
     private onRemoteStream: (stream: MediaStream) => void = () => {},
-  ) {}
+  ) {
+    this.swMessageListener = (ev: MessageEvent) => {
+      if (ev.data && ev.data.type === 'WEBRTC_CHUNK_REQUEST') {
+        if (this.mediaDcRef?.readyState === 'open') {
+          this.mediaDcRef.send(JSON.stringify(ev.data));
+        } else {
+          navigator.serviceWorker.controller?.postMessage({ type: 'WEBRTC_CHUNK_ERROR', reqId: ev.data.reqId });
+        }
+      }
+    };
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', this.swMessageListener);
+    }
+  }
 
   /**
    * Connect to a room. Sends a join-request to the host and waits for approval.
@@ -156,6 +172,9 @@ export class JoinWebRTC {
     this.pool.destroy();
     this.pc?.close();
     this.localStream?.getTracks().forEach((t) => t.stop());
+    if (this.swMessageListener && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.removeEventListener('message', this.swMessageListener);
+    }
   }
 
   // ─── Private ───────────────────────────────────────────────────────────────
@@ -294,6 +313,31 @@ export class JoinWebRTC {
           try {
             this.onChat(JSON.parse(ev.data));
           } catch {}
+        };
+      }
+      if (dc.label === 'media') {
+        this.mediaDcRef = dc;
+        dc.binaryType = 'arraybuffer';
+        dc.onmessage = (ev) => {
+          if (typeof ev.data === 'string') {
+            try {
+              const msg = JSON.parse(ev.data);
+              if (msg.type === 'WEBRTC_CHUNK_RESPONSE' || msg.type === 'WEBRTC_CHUNK_ERROR') {
+                this.currentMediaMeta = msg;
+                if (msg.type === 'WEBRTC_CHUNK_ERROR') {
+                  navigator.serviceWorker.controller?.postMessage(msg);
+                }
+              }
+            } catch {}
+          } else if (ev.data instanceof ArrayBuffer) {
+             if (this.currentMediaMeta) {
+               navigator.serviceWorker.controller?.postMessage({
+                 ...this.currentMediaMeta,
+                 chunk: ev.data
+               }, [ev.data]);
+               this.currentMediaMeta = null;
+             }
+          }
         };
       }
     };

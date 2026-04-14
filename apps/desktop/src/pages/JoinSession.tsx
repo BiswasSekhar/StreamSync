@@ -117,33 +117,62 @@ export function JoinSession() {
     }
   }, []);
 
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleMagnet = useCallback(async (magnet: string, name: string) => {
     setStatus("streaming"); setFileName(name || "Video");
+
+    // 1. Kick off BitTorrent loading
     try {
       await invoke("load_magnet_link", { magnetLink: magnet });
     } catch (e: any) {
-      setError(`Failed to load torrent: ${e}`);
-      setStatus("error");
+      console.warn(`Failed to seed torrent locally: ${e}`);
     }
+
+    // 2. Start a fallback timer. If BitTorrent doesn't find peers (NAT blocked) in 8s, fallback to WebRTC.
+    if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
+    fallbackTimerRef.current = setTimeout(() => {
+      console.log("[JoinSession] BitTorrent blocked or slow. Falling back to WebRTC Bridge!");
+      const v = videoRef.current;
+      if (v && v.src === "") {
+        v.src = "/webrtc-media";
+        v.oncanplay = () => {
+          setStatus("playing");
+          if (pendingSyncRef.current && rtcRef.current) {
+            rtcRef.current.applySync(pendingSyncRef.current, v);
+            pendingSyncRef.current = null;
+          }
+        };
+        v.onerror = () => { setError("Video failed to load over WebRTC."); setStatus("error"); };
+      }
+    }, 8000);
   }, []);
 
-  // Listen for the torrent video becoming available locally
+  // 3. Listen for successful BitTorrent connection (Public swarms)
   useEffect(() => {
     const unlisten = listen("torrent-video-ready", (event: any) => {
+      console.log("[JoinSession] BitTorrent swarm connected successfully.");
+      if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
+      
       const v = videoRef.current;
       if (!v) return;
-      v.src = "http://localhost:8787/host-video";
-      v.oncanplay = () => {
-        setStatus("playing");
-        if (pendingSyncRef.current && rtcRef.current) {
-          rtcRef.current.applySync(pendingSyncRef.current, v);
-          pendingSyncRef.current = null;
-        }
-      };
-      v.onerror = () => { setError("Video failed to load."); setStatus("error"); };
+      
+      // If WebRTC hasn't taken over yet, use standard BitTorrent streaming
+      if (v.src === "" || !v.src.includes("webrtc-media")) {
+        v.src = "http://localhost:8787/host-video";
+        v.oncanplay = () => {
+          setStatus("playing");
+          if (pendingSyncRef.current && rtcRef.current) {
+            rtcRef.current.applySync(pendingSyncRef.current, v);
+            pendingSyncRef.current = null;
+          }
+        };
+        v.onerror = () => { setError("BitTorrent Video failed to load."); setStatus("error"); };
+      }
     });
     return () => {
       unlisten.then(un => un());
+      if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
     };
   }, []);
 
