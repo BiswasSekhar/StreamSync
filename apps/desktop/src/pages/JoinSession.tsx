@@ -128,16 +128,16 @@ export function JoinSession() {
     
     // Verify SourceBuffer is still valid (not removed from MediaSource)
     const ms = mediaSourceRef.current;
-    if (!ms || ms.readyState !== "open") {
-      console.warn("[MSE] MediaSource is not open, clearing pending chunks");
+    if (!ms) {
+      console.warn("[MSE] MediaSource was cleared, dropping chunks");
       pendingChunks.current = [];
-      isAppending.current = false;
       return;
     }
     
     isAppending.current = true;
+    const chunk = pendingChunks.current.shift()!;
     try {
-      sb.appendBuffer(pendingChunks.current.shift()!);
+      sb.appendBuffer(chunk);
     } catch (e: any) {
       console.error("[MSE] appendBuffer error:", e);
       isAppending.current = false;
@@ -154,12 +154,13 @@ export function JoinSession() {
     const fileSize = fileSizeRef.current;
     if (fileSize === 0) return;
     
-    // Verify MediaSource is still valid before requesting chunks
-    const ms = mediaSourceRef.current;
-    if (!ms || ms.readyState !== "open") {
+    // Verify SourceBuffer is ready (which means MediaSource is open)
+    const sb = sourceBufferRef.current;
+    if (!sb) {
       return;
     }
     
+    const oldSize = pendingRequests.current.size;
     while (pendingRequests.current.size < IN_FLIGHT && nextByte.current < fileSize) {
       const start = nextByte.current;
       const end = Math.min(start + CHUNK_SIZE - 1, fileSize - 1);
@@ -168,25 +169,36 @@ export function JoinSession() {
       rtcRef.current?.requestChunk(start, end, reqId);
       nextByte.current = end + 1;
     }
+    if (pendingRequests.current.size > oldSize) {
+      console.log("[MSE] Pump requested chunks:", pendingRequests.current.size - oldSize, "total pending:", pendingRequests.current.size);
+    }
   }, []);
 
   const handleMediaChunk = useCallback((data: ArrayBuffer, meta: ChunkMeta) => {
     pendingRequests.current.delete(meta.reqId);
     
-    // Only queue chunk if MediaSource is still valid
-    const ms = mediaSourceRef.current;
-    if (ms && ms.readyState === "open") {
+    // Only queue chunk if SourceBuffer is ready (MediaSource is open)
+    const sb = sourceBufferRef.current;
+    if (sb && !sb.updating) {
       pendingChunks.current.push(data);
+      console.log("[MSE] Chunk received and queued, pending:", pendingChunks.current.length);
       appendNextChunk();
       pumpChunks();
-    } else {
-      console.warn("[MSE] Received chunk but MediaSource is not open, discarding");
+    } else if (!sb) {
+      console.log("[MSE] Chunk received but SourceBuffer not ready, queueing. Pending in array:", pendingChunks.current.length + 1);
+      // Still queue the chunk - it'll be processed once SourceBuffer is ready
+      pendingChunks.current.push(data);
+    } else if (sb.updating) {
+      console.log("[MSE] Chunk received but SourceBuffer is updating, queueing");
+      pendingChunks.current.push(data);
     }
   }, [appendNextChunk, pumpChunks]);
 
   const handleVideoReady = useCallback((info: VideoReadyInfo) => {
     const v = videoRef.current;
     if (!v) return;
+
+    console.log("[MSE] Video ready:", { fileName: info.fileName, fileSize: info.fileSize, duration: info.durationSeconds, mimeCodec: info.mimeCodec });
 
     setFileName(info.fileName);
     setStatus("streaming");
@@ -202,15 +214,21 @@ export function JoinSession() {
     v.src = URL.createObjectURL(ms);
 
     ms.addEventListener("sourceopen", () => {
+      console.log("[MSE] sourceopen fired, ms.readyState:", ms.readyState);
       let sb: SourceBuffer;
       try {
         sb = ms.addSourceBuffer(info.mimeCodec);
       } catch (e) {
+        console.warn("[MSE] Failed to add SourceBuffer with mime codec:", info.mimeCodec, e);
         // Fallback to generic MP4 if codec string rejected
-        try { sb = ms.addSourceBuffer("video/mp4"); } catch { return; }
+        try { sb = ms.addSourceBuffer("video/mp4"); } catch (e2) { 
+          console.error("[MSE] Failed to add SourceBuffer with fallback codec", e2);
+          return; 
+        }
       }
       sourceBufferRef.current = sb;
       ms.duration = info.durationSeconds;
+      console.log("[MSE] SourceBuffer created, duration set:", info.durationSeconds);
 
       sb.addEventListener("updateend", () => {
         isAppending.current = false;
@@ -227,6 +245,7 @@ export function JoinSession() {
         }
       });
 
+      console.log("[MSE] Initial pumpChunks call, pending chunks:", pendingChunks.current.length);
       pumpChunks();
     }, { once: true });
 

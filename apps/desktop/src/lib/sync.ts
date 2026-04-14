@@ -9,6 +9,7 @@ export interface SyncMessage {
 export class SyncController {
   private clockOffset = 0;
   private lastSyncSeq = -1;
+  private playPromise: Promise<void> | null = null;
 
   updateClockOffset(t1: number, t2: number, t3: number) {
     const rtt = t3 - t1;
@@ -43,9 +44,25 @@ export class SyncController {
         changed = true;
       }
       if (sync.playing && video.paused) {
-        video.play().catch(console.error);
+        // Wait for any pending play promise before trying to play again
+        if (this.playPromise) {
+          this.playPromise.then(() => {
+            if (video.paused) video.play().catch(() => {});
+          }).catch(() => {});
+        } else {
+          this.playPromise = video.play().then(() => {
+            this.playPromise = null;
+          }).catch((err) => {
+            // AbortError is expected when play is interrupted by pause
+            if (err?.name !== "AbortError") {
+              console.error("[Sync] Play error:", err);
+            }
+            this.playPromise = null;
+          });
+        }
         changed = true;
       } else if (!sync.playing && !video.paused) {
+        // Always safe to pause immediately
         video.pause();
         changed = true;
       }
