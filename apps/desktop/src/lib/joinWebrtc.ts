@@ -57,9 +57,12 @@ export class JoinWebRTC {
   private iceBatchTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly ICE_BATCH_DELAY = 300; // ms
 
-  // Join-request retry for race condition where receiver joins before host creates room
+  // Join-request retry with exponential backoff
   private joinRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private joinApproved = false;
+  private joinRetryCount = 0;
+  private readonly MIN_RETRY_DELAY = 8_000; // 8s
+  private readonly MAX_RETRY_DELAY = 30_000; // 30s
   // Set by close() so a pending async connect() does not send a stale join-request
   // after React StrictMode cleanup has already destroyed this instance.
   private closed = false;
@@ -210,12 +213,18 @@ export class JoinWebRTC {
 
   private startJoinRetry() {
     this.joinRetryTimer = setTimeout(() => {
-      if (!this.joinApproved) {
-        console.log('[JoinWebRTC] Retrying join-request...');
+      if (!this.joinApproved && !this.closed) {
+        this.joinRetryCount++;
+        // Exponential backoff: 8s, 16s, 24s, 30s (capped)
+        const delay = Math.min(
+          this.MIN_RETRY_DELAY * this.joinRetryCount,
+          this.MAX_RETRY_DELAY
+        );
+        console.log(`[JoinWebRTC] Retrying join-request (attempt ${this.joinRetryCount}, next retry in ${delay / 1000}s)...`);
         this.sendSignal({ type: 'join-request', displayName: getDisplayName() });
-        this.startJoinRetry();
+        this.joinRetryTimer = setTimeout(() => this.startJoinRetry(), delay);
       }
-    }, 15_000);
+    }, this.joinRetryCount === 0 ? this.MIN_RETRY_DELAY : 0);
   }
 
   // ─── Private ───────────────────────────────────────────────────────────────
@@ -259,6 +268,7 @@ export class JoinWebRTC {
       case 'join-approved':
         console.log('[JoinWebRTC] Admission approved by host');
         this.joinApproved = true;
+        this.joinRetryCount = 0; // Reset for future attempts
         if (this.joinRetryTimer) { clearTimeout(this.joinRetryTimer); this.joinRetryTimer = null; }
         this.onJoinApproved();
         break;

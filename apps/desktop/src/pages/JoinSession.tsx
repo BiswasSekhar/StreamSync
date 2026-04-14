@@ -125,18 +125,41 @@ export function JoinSession() {
     if (isAppending.current) return;
     const sb = sourceBufferRef.current;
     if (!sb || sb.updating || pendingChunks.current.length === 0) return;
+    
+    // Verify SourceBuffer is still valid (not removed from MediaSource)
+    const ms = mediaSourceRef.current;
+    if (!ms || ms.readyState !== "open") {
+      console.warn("[MSE] MediaSource is not open, clearing pending chunks");
+      pendingChunks.current = [];
+      isAppending.current = false;
+      return;
+    }
+    
     isAppending.current = true;
     try {
       sb.appendBuffer(pendingChunks.current.shift()!);
-    } catch (e) {
+    } catch (e: any) {
       console.error("[MSE] appendBuffer error:", e);
       isAppending.current = false;
+      
+      // If SourceBuffer was removed, clear pending chunks
+      if (e?.name === "InvalidStateError") {
+        console.warn("[MSE] SourceBuffer invalidated, clearing pending chunks");
+        pendingChunks.current = [];
+      }
     }
   }, []);
 
   const pumpChunks = useCallback(() => {
     const fileSize = fileSizeRef.current;
     if (fileSize === 0) return;
+    
+    // Verify MediaSource is still valid before requesting chunks
+    const ms = mediaSourceRef.current;
+    if (!ms || ms.readyState !== "open") {
+      return;
+    }
+    
     while (pendingRequests.current.size < IN_FLIGHT && nextByte.current < fileSize) {
       const start = nextByte.current;
       const end = Math.min(start + CHUNK_SIZE - 1, fileSize - 1);
@@ -149,9 +172,16 @@ export function JoinSession() {
 
   const handleMediaChunk = useCallback((data: ArrayBuffer, meta: ChunkMeta) => {
     pendingRequests.current.delete(meta.reqId);
-    pendingChunks.current.push(data);
-    appendNextChunk();
-    pumpChunks();
+    
+    // Only queue chunk if MediaSource is still valid
+    const ms = mediaSourceRef.current;
+    if (ms && ms.readyState === "open") {
+      pendingChunks.current.push(data);
+      appendNextChunk();
+      pumpChunks();
+    } else {
+      console.warn("[MSE] Received chunk but MediaSource is not open, discarding");
+    }
   }, [appendNextChunk, pumpChunks]);
 
   const handleVideoReady = useCallback((info: VideoReadyInfo) => {
@@ -270,7 +300,23 @@ export function JoinSession() {
     rtcRef.current = rtc;
     setStatus("connecting");
     rtc.connect(roomUrl);
-    return () => { rtc.close(); };
+    
+    return () => {
+      rtc.close();
+      // Clean up MediaSource when disconnecting
+      pendingChunks.current = [];
+      if (sourceBufferRef.current && mediaSourceRef.current) {
+        try {
+          sourceBufferRef.current = null;
+          if (mediaSourceRef.current.readyState === "open") {
+            mediaSourceRef.current.endOfStream();
+          }
+          mediaSourceRef.current = null;
+        } catch (e) {
+          console.warn("[MSE] Error during MediaSource cleanup:", e);
+        }
+      }
+    };
   }, [handleVideoReady, handleSync, handleChat, handleMediaChunk, handleRemoteStream, roomUrl, showToast]);
 
   const sendControl = useCallback((action: "play" | "pause" | "seek") => {
