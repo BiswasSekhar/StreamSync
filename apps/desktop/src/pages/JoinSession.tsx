@@ -49,6 +49,11 @@ export function JoinSession() {
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const rtcRef = useRef<JoinWebRTC | null>(null);
   const pendingSyncRef = useRef<SyncMessage | null>(null);
+  // Mirror of `status` kept in a ref so callbacks can read the latest value
+  // without capturing it as a closure dep (which would make handleVideoReady
+  // unstable and cause the main useEffect to re-run on every status change).
+  const statusRef = useRef<Status>(status);
+  statusRef.current = status;
   const suppressControlRef = useRef(0);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const roomUrl = useSessionStore(s => s.joinRoomUrl);
@@ -182,7 +187,7 @@ export function JoinSession() {
         appendNextChunk();
         pumpChunks();
         // Transition to playing once we have enough data buffered
-        if (v.readyState >= 2 && status !== "playing") {
+        if (v.readyState >= 2 && statusRef.current !== "playing") {
           setStatus("playing");
           v.play().catch(() => {});
           if (pendingSyncRef.current && rtcRef.current) {
@@ -215,7 +220,7 @@ export function JoinSession() {
     });
 
     v.addEventListener("canplay", () => {
-      if (status !== "playing") {
+      if (statusRef.current !== "playing") {
         setStatus("playing");
         if (pendingSyncRef.current && rtcRef.current) {
           rtcRef.current.applySync(pendingSyncRef.current, v);
@@ -223,7 +228,7 @@ export function JoinSession() {
         }
       }
     }, { once: true });
-  }, [appendNextChunk, pumpChunks, status]);
+  }, [appendNextChunk, pumpChunks]);
 
   const handleChat = useCallback((msg: ChatMsg) => {
     setChats(prev => [...prev, msg]);
@@ -642,6 +647,7 @@ function StatusBadge({ status, text }: { status: Status; text: string }) {
     error: { color: "#ef4444", text: "Error" },
     disconnected: { color: "#6b7280", text: "Disconnected" },
     denied: { color: "#ef4444", text: "Admission Denied" },
+    "host-ended": { color: "#6b7280", text: "Session Ended" },
   };
   const { color, text: label } = cfg[status];
   return <span style={{ background: `${color}18`, border: `1px solid ${color}40`, color, borderRadius: 20, padding: "4px 12px", fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}` }} />{label}</span>;
