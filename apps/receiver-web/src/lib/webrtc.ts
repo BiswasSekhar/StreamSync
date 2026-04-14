@@ -4,14 +4,15 @@ import { SyncController, SyncMessage } from "./sync";
 // Relays known to accept ephemeral event kinds (20000-29999).
 // SimplePool publishes to all simultaneously — more relays = more resilience.
 // DO NOT add relay.primal.net or purplepag.es — they block kind 29999.
+// DO NOT add nostr.wine — requires paid registration to write events.
 const SIGNAL_RELAYS = [
   "wss://nos.lol",
   "wss://relay.snort.social",
-  "wss://nostr.wine",
   "wss://nostr-pub.wellorder.net",
-  "wss://relayable.org",
   "wss://nostr.oxtr.dev",
-  "wss://relay.nostr.band",
+  "wss://nostr.bitcoiner.social",
+  "wss://relay.nostr.wirednet.jp",
+  "wss://nostr.fmt.wiz.biz",
 ];
 
 interface ChatMessage {
@@ -93,6 +94,9 @@ export class ReceiverWebRTC {
   // Join-request retry for race condition where receiver joins before host session is active
   private joinRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private joinApproved = false;
+  // Set by close() so a pending connect() does not send a stale join-request after
+  // React StrictMode cleanup has already destroyed this instance.
+  private closed = false;
 
   constructor(
     private onVideoReady: (info: VideoReadyInfo) => void,
@@ -128,8 +132,13 @@ export class ReceiverWebRTC {
       },
     });
 
-    this.sendSignal({ type: "join-request", displayName: getDisplayName() });
-    this.startJoinRetry();
+    // Delay the initial join-request by one macrotask so React StrictMode's
+    // synchronous cleanup can set this.closed = true before we publish to Nostr.
+    setTimeout(() => {
+      if (this.closed) return;
+      this.sendSignal({ type: "join-request", displayName: getDisplayName() });
+      this.startJoinRetry();
+    }, 50);
   }
 
   requestChunk(start: number, end: number, reqId: string): void {
@@ -157,6 +166,7 @@ export class ReceiverWebRTC {
   }
 
   close(): void {
+    this.closed = true;
     if (this.joinRetryTimer) { clearTimeout(this.joinRetryTimer); this.joinRetryTimer = null; }
     if (this.iceBatchTimer) { clearTimeout(this.iceBatchTimer); this.iceBatchTimer = null; }
     if (this.hostPeerId || this.initialOfferResolved) {

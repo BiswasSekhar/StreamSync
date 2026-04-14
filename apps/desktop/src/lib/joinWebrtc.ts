@@ -60,6 +60,9 @@ export class JoinWebRTC {
   // Join-request retry for race condition where receiver joins before host creates room
   private joinRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private joinApproved = false;
+  // Set by close() so a pending async connect() does not send a stale join-request
+  // after React StrictMode cleanup has already destroyed this instance.
+  private closed = false;
 
   constructor(
     private onVideoReady: (info: VideoReadyInfo) => void,
@@ -104,6 +107,12 @@ export class JoinWebRTC {
         },
       },
     );
+
+    // Delay the initial join-request by one macrotask so React StrictMode's
+    // synchronous cleanup can set this.closed = true before we publish to Nostr,
+    // preventing a duplicate join-request from the StrictMode phantom mount.
+    await new Promise<void>(resolve => setTimeout(resolve, 50));
+    if (this.closed) return;
 
     // Ask host for admission
     this.sendSignal({ type: 'join-request', displayName: getDisplayName() });
@@ -172,6 +181,7 @@ export class JoinWebRTC {
   }
 
   close() {
+    this.closed = true;
     // Cancel join retry timer
     if (this.joinRetryTimer) { clearTimeout(this.joinRetryTimer); this.joinRetryTimer = null; }
     // In React StrictMode, an eager cleanup can happen before the real session is
