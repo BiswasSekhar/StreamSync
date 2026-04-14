@@ -62,6 +62,7 @@ pub async fn start_seeding(
     // DHT often fails inside desktop apps (port conflicts, firewall) and kills the session.
     // We rely on WebTorrent trackers for peer discovery instead.
     let mut opts = SessionOptions::default();
+    opts.disable_dht_persistence = true;
     opts.listen_port_range = Some(6881..65535);
 
     let session = Session::new_with_opts(output_dir, opts)
@@ -305,6 +306,7 @@ pub async fn load_magnet(
     tracing::info!("Loading magnet link into: {:?}", download_dir);
 
     let mut opts = SessionOptions::default();
+    opts.disable_dht_persistence = true;
     opts.listen_port_range = Some(6881..65535);
 
     let session = Session::new_with_opts(download_dir.clone(), opts)
