@@ -12,7 +12,7 @@ interface FloatPos { x: number; y: number; }
 interface CamTile { id: string; label: string; stream: MediaStream | null; isLocal: boolean; }
 
 export function Session() {
-  const { peers, roomUrl, closeRoom, leaveSession, sessionId, showToast, messages, displayName } = useSessionStore();
+  const { peers, roomUrl, closeRoom, leaveSession, sessionId, showToast, messages, displayName, roomCodeVisible } = useSessionStore();
   const hostRtcRef = useRef<HostWebRTC | null>(null);
   // Pending join requests (peerId → displayName)
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
@@ -105,27 +105,38 @@ export function Session() {
     hostRtcRef.current = rtc;
     rtc.connect(sessionId);
 
-    // If magnet already exists (e.g. effect re-runs), set it on the new instance immediately
+    // If encode is already complete (effect re-runs), inform the new RTC instance immediately
     const store = useSessionStore.getState();
-    if (store.magnetLink && roomUrl) {
-      const fileName = store.filePath?.split(/[\\/]/).pop() ?? "video";
-      const base = roomUrl.split("?")[0];
-      const videoUrl = base.endsWith("/") ? base + "host-video" : base + "/host-video";
-      rtc.setMagnet(store.magnetLink, fileName, videoUrl);
+    if (store.encodeComplete && store.probeResult && store.filePath) {
+      const fileName = store.filePath.split(/[\\/]/).pop() ?? "video.mp4";
+      rtc.setVideoReady(
+        fileName,
+        store.probeResult.codecHint,
+        store.probeResult.fileSizeBytes,
+        store.probeResult.durationSeconds,
+        store.magnetLink ?? undefined,
+      );
     }
 
     return () => { rtc.close(); hostRtcRef.current = null; };
   }, [sessionId, roomUrl, handleRemoteStream, stableOnPlaybackControl, displayName, addToast, showToast]);
 
-  const magnetLink = useSessionStore(s => s.magnetLink);
+  const encodeComplete = useSessionStore(s => s.encodeComplete);
+  const probeResult = useSessionStore(s => s.probeResult);
   const filePath = useSessionStore(s => s.filePath);
+  const magnetLink = useSessionStore(s => s.magnetLink);
   useEffect(() => {
-    if (magnetLink && hostRtcRef.current) {
-      const fileName = filePath?.split(/[\\/]/).pop() ?? "video";
-      // Pass the local axum streaming URL so the WebRTC proxy is authorized to fetch it
-      hostRtcRef.current.setMagnet(magnetLink, fileName, "http://localhost:8787/host-video");
+    if (encodeComplete && probeResult && hostRtcRef.current && filePath) {
+      const fileName = filePath.split(/[\\/]/).pop() ?? "video.mp4";
+      hostRtcRef.current.setVideoReady(
+        fileName,
+        probeResult.codecHint,
+        probeResult.fileSizeBytes,
+        probeResult.durationSeconds,
+        magnetLink ?? undefined,
+      );
     }
-  }, [magnetLink, filePath]);
+  }, [encodeComplete, probeResult, filePath, magnetLink]);
 
   // Broadcast host play/pause/seek position
   useEffect(() => {
@@ -366,7 +377,7 @@ export function Session() {
           </span>
         </div>
         <div style={{ pointerEvents: "all", display: "flex", alignItems: "center", gap: 8 }}>
-          {roomUrl && <RoomLink compact />}
+          {roomUrl && roomCodeVisible && <RoomLink compact />}
           <button onClick={leaveSession} style={btnGhost}>← Back</button>
           <button onClick={closeRoom} style={btnDanger}>End</button>
         </div>

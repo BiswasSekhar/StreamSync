@@ -76,6 +76,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             probe_file,
             extract_subtitle_command,
+            prepare_video_for_streaming,
             start_seeding_original,
             load_torrent_file,
             create_room,

@@ -37,6 +37,9 @@ export interface VideoProbeResult {
   hasHdr: boolean;
   audioCodec: string;
   needsTranscode: boolean;
+  needsRemux: boolean;
+  /** MSE MIME codec string for MediaSource.addSourceBuffer() */
+  codecHint: string;
   estimatedEncodeSeconds: number;
   fileSizeBytes: number;
   subtitleStreams: SubtitleStream[];
@@ -135,6 +138,10 @@ interface SessionStore {
 
   // Joiner state
   joinRoomUrl: string | null;
+
+  // Room code is only shown after the host enters the session view
+  // to avoid the race where receivers join before the host is ready
+  roomCodeVisible: boolean;
 }
 
 export const useSessionStore = create<SessionStore>((set, get) => ({
@@ -162,6 +169,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   ui: { toastMessage: null, toastType: "info" },
 
   joinRoomUrl: null,
+  roomCodeVisible: false,
 
   setFile: async (path) => {
     // Route .torrent files to the dedicated loader
@@ -212,16 +220,16 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
     try {
       if (!isTorrentSource) {
-        // Start seeding the original video file via librqbit
-        await invoke("start_seeding_original", { path: filePath });
+        // Prepare video for DataChannel streaming (remux/transcode as needed)
+        await invoke("prepare_video_for_streaming", { path: filePath });
       }
-      // For torrent source, load_torrent_file already kicked off the download+seed
+      // For torrent source, load_torrent_file already kicked off the download
 
       // Create room in backend to get the short code
       const code = await invoke<string>("create_room");
 
       set({ roomUrl: code, sessionId: code, tunnelConnected: true });
-      get().showToast("Room created! Share the code to invite viewers.", "success");
+      get().showToast("Room created! Open the session to share the code.", "success");
       return code;
     } catch (e) {
       get().showToast(`Failed to create room: ${e}`, "error");
@@ -234,7 +242,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   enterSession: () => {
-    set({ view: "session" });
+    // Reveal the room code only now — host is in session, Nostr listener is active
+    set({ view: "session", roomCodeVisible: true });
   },
 
   leaveSession: () => {
@@ -250,6 +259,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({
       view: "home",
       joinRoomUrl: null,
+      roomCodeVisible: false,
       // Reset all room/session state so the next "Create Watch Party" works
       roomUrl: null,
       sessionId: null,
@@ -418,8 +428,20 @@ export function initEventListeners() {
     useSessionStore.getState().showToast(`Encode error: ${payload}`, "error");
   });
 
-  on<{ fileName: string; filePath: string }>("torrent-video-ready", ({ payload }) => {
+  on<{ fileName: string; filePath: string }>("torrent-video-ready", async ({ payload }) => {
     useSessionStore.setState({ torrentFileName: payload.fileName });
+    // Probe the downloaded video file to get codec info for WebRTC streaming
+    try {
+      const probe = await invoke<VideoProbeResult>("probe_file", { path: payload.filePath });
+      useSessionStore.setState({
+        probeResult: probe,
+        filePath: payload.filePath, // point to the actual video, not the .torrent
+      });
+    } catch {
+      // Probe failed (file still partial) — set filePath so /host-video can serve it
+      // Session.tsx will call setVideoReady once probeResult arrives
+      useSessionStore.setState({ filePath: payload.filePath });
+    }
     useSessionStore.getState().showToast(`Torrent video ready: ${payload.fileName}`, "success");
   });
 

@@ -10,6 +10,22 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface VideoReadyInfo {
+  fileName: string;
+  mimeCodec: string;
+  fileSize: number;
+  durationSeconds: number;
+  /** Magnet link if host is sourcing from a public torrent swarm */
+  magnetLink?: string;
+}
+
+export interface ChunkMeta {
+  type: 'WEBRTC_CHUNK_RESPONSE';
+  reqId: string;
+  size: number;
+  contentRange: string;
+}
+
 /** Result of requesting camera access */
 export type CameraPermissionStatus = 'granted' | 'denied' | 'unavailable';
 
@@ -22,9 +38,8 @@ export class JoinWebRTC {
   private chatDc: RTCDataChannel | null = null;
   private syncDcRef: RTCDataChannel | null = null;
   private mediaDcRef: RTCDataChannel | null = null;
-  private currentMediaMeta: any = null;
-  private swMessageListener: ((ev: MessageEvent) => void) | null = null;
-  
+  private currentMediaMeta: ChunkMeta | null = null;
+
   public localStream: MediaStream | null = null;
   private initialOfferResolved = false;
   private hostPeerId: string | null = null;
@@ -42,29 +57,22 @@ export class JoinWebRTC {
   private iceBatchTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly ICE_BATCH_DELAY = 300; // ms
 
+  // Join-request retry for race condition where receiver joins before host creates room
+  private joinRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private joinApproved = false;
+
   constructor(
-    private onMagnet: (magnet: string, fileName: string, videoUrl: string) => void,
+    private onVideoReady: (info: VideoReadyInfo) => void,
     private onSync: (sync: SyncMessage) => void,
     private onChat: (msg: ChatMessage) => void,
     private onConnected: () => void,
     private onDisconnected: () => void,
     private onJoinDenied: (reason: string) => void,
+    private onHostEnded: () => void = () => {},
+    private onMediaChunk: (data: ArrayBuffer, meta: ChunkMeta) => void = () => {},
     private onCameraStream: (stream: MediaStream | null, status: CameraPermissionStatus) => void = () => {},
     private onRemoteStream: (stream: MediaStream) => void = () => {},
-  ) {
-    this.swMessageListener = (ev: MessageEvent) => {
-      if (ev.data && ev.data.type === 'WEBRTC_CHUNK_REQUEST') {
-        if (this.mediaDcRef?.readyState === 'open') {
-          this.mediaDcRef.send(JSON.stringify(ev.data));
-        } else {
-          navigator.serviceWorker.controller?.postMessage({ type: 'WEBRTC_CHUNK_ERROR', reqId: ev.data.reqId });
-        }
-      }
-    };
-    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.addEventListener('message', this.swMessageListener);
-    }
-  }
+  ) {}
 
   /**
    * Connect to a room. Sends a join-request to the host and waits for approval.
@@ -98,6 +106,8 @@ export class JoinWebRTC {
 
     // Ask host for admission
     this.sendSignal({ type: 'join-request', displayName: getDisplayName() });
+    // Retry every 15s if host hasn't created the session yet
+    this.startJoinRetry();
   }
 
   /**
@@ -161,6 +171,8 @@ export class JoinWebRTC {
   }
 
   close() {
+    // Cancel join retry timer
+    if (this.joinRetryTimer) { clearTimeout(this.joinRetryTimer); this.joinRetryTimer = null; }
     // In React StrictMode, an eager cleanup can happen before the real session is
     // established. Avoid sending a stale leave that cancels the surviving join request.
     if (this.hostPeerId || this.initialOfferResolved) {
@@ -172,9 +184,27 @@ export class JoinWebRTC {
     this.pool.destroy();
     this.pc?.close();
     this.localStream?.getTracks().forEach((t) => t.stop());
-    if (this.swMessageListener && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.removeEventListener('message', this.swMessageListener);
+  }
+
+  /** Request a byte-range chunk from the host via the media DataChannel */
+  requestChunk(start: number, end: number, reqId: string) {
+    if (this.mediaDcRef?.readyState === 'open') {
+      this.mediaDcRef.send(JSON.stringify({
+        type: 'WEBRTC_CHUNK_REQUEST',
+        reqId,
+        range: `bytes=${start}-${end}`,
+      }));
     }
+  }
+
+  private startJoinRetry() {
+    this.joinRetryTimer = setTimeout(() => {
+      if (!this.joinApproved) {
+        console.log('[JoinWebRTC] Retrying join-request...');
+        this.sendSignal({ type: 'join-request', displayName: getDisplayName() });
+        this.startJoinRetry();
+      }
+    }, 15_000);
   }
 
   // ─── Private ───────────────────────────────────────────────────────────────
@@ -217,7 +247,15 @@ export class JoinWebRTC {
     switch (msg.type) {
       case 'join-approved':
         console.log('[JoinWebRTC] Admission approved by host');
+        this.joinApproved = true;
+        if (this.joinRetryTimer) { clearTimeout(this.joinRetryTimer); this.joinRetryTimer = null; }
         // Host will send an offer next — nothing to do yet
+        break;
+
+      case 'host-ended':
+        console.log('[JoinWebRTC] Host ended the session');
+        this.onHostEnded();
+        this.close();
         break;
 
       case 'join-denied':
@@ -293,8 +331,14 @@ export class JoinWebRTC {
         dc.onmessage = (ev) => {
           try {
             const msg = JSON.parse(ev.data);
-            if (msg.type === 'magnet') {
-              this.onMagnet(msg.magnet, msg.fileName || 'video', msg.videoUrl || '');
+            if (msg.type === 'video-ready') {
+              this.onVideoReady({
+                fileName: msg.fileName,
+                mimeCodec: msg.mimeCodec,
+                fileSize: msg.fileSize,
+                durationSeconds: msg.durationSeconds,
+                magnetLink: msg.magnetLink ?? undefined,
+              });
             }
           } catch {}
         };
@@ -321,22 +365,17 @@ export class JoinWebRTC {
         dc.onmessage = (ev) => {
           if (typeof ev.data === 'string') {
             try {
-              const msg = JSON.parse(ev.data);
-              if (msg.type === 'WEBRTC_CHUNK_RESPONSE' || msg.type === 'WEBRTC_CHUNK_ERROR') {
-                this.currentMediaMeta = msg;
-                if (msg.type === 'WEBRTC_CHUNK_ERROR') {
-                  navigator.serviceWorker.controller?.postMessage(msg);
-                }
+              const meta = JSON.parse(ev.data);
+              if (meta.type === 'WEBRTC_CHUNK_RESPONSE') {
+                this.currentMediaMeta = meta as ChunkMeta;
               }
+              // WEBRTC_CHUNK_ERROR is handled by the pump via missing chunks
             } catch {}
           } else if (ev.data instanceof ArrayBuffer) {
-             if (this.currentMediaMeta) {
-               navigator.serviceWorker.controller?.postMessage({
-                 ...this.currentMediaMeta,
-                 chunk: ev.data
-               }, [ev.data]);
-               this.currentMediaMeta = null;
-             }
+            if (this.currentMediaMeta) {
+              this.onMediaChunk(ev.data, this.currentMediaMeta);
+              this.currentMediaMeta = null;
+            }
           }
         };
       }
@@ -345,10 +384,7 @@ export class JoinWebRTC {
     this.pc.onconnectionstatechange = () => {
       console.log('[JoinWebRTC] Connection state:', this.pc?.connectionState);
       if (this.pc?.connectionState === 'connected') this.onConnected();
-      if (
-        this.pc?.connectionState === 'disconnected' ||
-        this.pc?.connectionState === 'failed'
-      ) {
+      if (this.pc?.connectionState === 'failed') {
         this.onDisconnected();
       }
     };

@@ -84,7 +84,12 @@ pub struct VideoProbeResult {
     pub fps: f64,
     pub has_hdr: bool,
     pub audio_codec: String,
+    /// True when video bitstream must be re-encoded (incompatible codec or audio)
     pub needs_transcode: bool,
+    /// True when the container must be remuxed to fMP4 (fast, lossless, no re-encode)
+    pub needs_remux: bool,
+    /// MSE MIME codec string for MediaSource.addSourceBuffer()
+    pub codec_hint: String,
     pub estimated_encode_seconds: u64,
     pub file_size_bytes: u64,
     pub subtitle_streams: Vec<SubtitleStream>,
@@ -174,14 +179,40 @@ pub async fn probe_video(path: &str) -> anyhow::Result<VideoProbeResult> {
         .map(|m| m.len())
         .unwrap_or(0);
 
-    // Determine if transcode is needed
-    // Only H.264 in MP4 container can potentially be remuxed
-    let needs_transcode = codec_name != "h264" || !container_format.contains("mp4");
+    // Three-tier classification:
+    //  Tier 0: no-op or fast fragmentation pass only (MP4 H.264 or HEVC with AAC)
+    //  Tier 1: needs_remux — codec is fine, container is wrong; fast -c copy to fMP4
+    //  Tier 2: needs_transcode — codec is incompatible, must re-encode
+    let is_h264 = codec_name == "h264";
+    let is_hevc = codec_name == "hevc" || codec_name == "h265";
+    let is_audio_compat = matches!(
+        audio_codec.as_str(),
+        "aac" | "mp3" | "opus" | "none"
+    );
+    // MP4/MOV containers are already fMP4-compatible after a fast fragmentation pass
+    let is_mp4_container = container_format.contains("mp4")
+        || container_format.contains("mov")
+        || container_format.contains("m4v");
+
+    let needs_transcode = (!is_h264 && !is_hevc) || !is_audio_compat;
+    // Even MP4 needs a remux pass to add fragmentation headers for MSE
+    let needs_remux = !needs_transcode;
+
+    let codec_hint = if is_hevc {
+        "video/mp4; codecs=\"hvc1.1.6.L120.90, mp4a.40.2\"".to_string()
+    } else {
+        // Default to H.264 MSE string (covers both Tier 0 and post-transcode output)
+        "video/mp4; codecs=\"avc1.42E01E, mp4a.40.2\"".to_string()
+    };
 
     let estimated_encode_seconds = if needs_transcode {
-        (duration_seconds / 2.0) as u64  // Rough estimate: 2x real-time software
+        (duration_seconds / 2.0) as u64
+    } else if !is_mp4_container {
+        // MKV/TS/AVI remux: very fast (hundreds of MB/s copy rate)
+        (duration_seconds / 120.0) as u64 + 3
     } else {
-        (duration_seconds / 10.0) as u64  // Remux is very fast
+        // MP4 fragmentation pass: nearly instant
+        5u64
     };
 
     Ok(VideoProbeResult {
@@ -195,6 +226,8 @@ pub async fn probe_video(path: &str) -> anyhow::Result<VideoProbeResult> {
         has_hdr,
         audio_codec,
         needs_transcode,
+        needs_remux,
+        codec_hint,
         estimated_encode_seconds,
         file_size_bytes,
         subtitle_streams,
@@ -309,6 +342,61 @@ pub fn get_temp_output_path(input_path: &str) -> PathBuf {
     temp_dir.join(format!("{}_streamsync_output.mp4", stem))
 }
 
+/// Fast container remux: copies the video/audio bitstream as-is into a
+/// fragmented MP4 suitable for MSE streaming. No re-encoding — runs in seconds.
+pub async fn start_remux_pipeline(
+    input_path: String,
+    state: Arc<AppState>,
+    app_handle: tauri::AppHandle,
+    current_file: Arc<tokio::sync::RwLock<Option<String>>>,
+) -> anyhow::Result<()> {
+    let output_path = get_temp_output_path(&input_path);
+    let output_str = output_path.to_string_lossy().to_string();
+
+    tracing::info!("Starting fast remux: {} -> {}", input_path, output_str);
+
+    let ffmpeg = resolve_binary("ffmpeg");
+    let status = get_command(&ffmpeg)
+        .args([
+            "-y",
+            "-i", &input_path,
+            "-c:v", "copy",
+            "-c:a", "copy",
+            // Keyframe every 2s so MSE seeking works cleanly (metadata only, no decode)
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+            "-frag_duration", "2000000",
+            &output_str,
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("Failed to spawn FFmpeg for remux")?
+        .wait()
+        .await?;
+
+    if !status.success() {
+        let code = status.code().unwrap_or(-1);
+        return Err(anyhow!("FFmpeg remux failed with code {}", code));
+    }
+
+    tracing::info!("Remux complete: {}", output_str);
+
+    // Point the HTTP server at the remuxed output
+    {
+        let mut guard = current_file.write().await;
+        *guard = Some(output_str);
+    }
+
+    {
+        let mut enc = state.encoder.lock().await;
+        enc.encode_complete = true;
+    }
+    state.emit(AppEvent::EncodeComplete);
+    let _ = app_handle.emit("encode-complete", ());
+
+    Ok(())
+}
+
 fn build_ffmpeg_args(
     input: &str,
     output: &str,
@@ -381,12 +469,13 @@ fn build_ffmpeg_args(
     args
 }
 
-/// Core pipeline: FFmpeg encodes to file → librqbit reads file → creates torrent pieces
+/// Core pipeline: FFmpeg transcodes the video to H.264 fMP4 for MSE streaming.
 pub async fn start_encode_pipeline(
     input_path: String,
     hw_encoder: HwEncoder,
     state: Arc<AppState>,
     app_handle: tauri::AppHandle,
+    current_file: Arc<tokio::sync::RwLock<Option<String>>>,
 ) -> anyhow::Result<()> {
     let output_path = get_temp_output_path(&input_path);
     let output_str = output_path.to_string_lossy().to_string();
@@ -429,26 +518,18 @@ pub async fn start_encode_pipeline(
     let currently_hw = hw_encoder != HwEncoder::Software;
 
     if status.success() {
-        let mut enc = state.encoder.lock().await;
-        enc.encode_complete = true;
-        drop(enc);
+        // Point the HTTP server at the transcoded output
+        {
+            let mut guard = current_file.write().await;
+            *guard = Some(output_str.clone());
+        }
+        {
+            let mut enc = state.encoder.lock().await;
+            enc.encode_complete = true;
+        }
         state.emit(AppEvent::EncodeComplete);
         let _ = app_handle.emit("encode-complete", ());
-        tracing::info!("Encoding complete, starting torrent seeding");
-
-        // Start seeding now that the file is complete
-        let state_clone = Arc::clone(&state);
-        let app_clone = app_handle.clone();
-        let output_clone = output_path.clone();
-        tokio::spawn(async move {
-            if let Err(e) = crate::engine::torrent::start_seeding(
-                output_clone,
-                state_clone,
-                app_clone,
-            ).await {
-                tracing::error!("Failed to start torrent seeding: {}", e);
-            }
-        });
+        tracing::info!("Encoding complete: {}", output_str);
     } else {
         let code = status.code().unwrap_or(-1);
         if code != 0 && currently_hw {
@@ -460,6 +541,7 @@ pub async fn start_encode_pipeline(
                 HwEncoder::Software,
                 state,
                 app_handle,
+                current_file,
             )).await?;
         } else {
             let msg = format!("FFmpeg exited with code {}", code);

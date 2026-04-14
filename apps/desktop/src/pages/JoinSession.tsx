@@ -1,12 +1,10 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { JoinWebRTC, CameraPermissionStatus } from "../lib/joinWebrtc";
+import { JoinWebRTC, CameraPermissionStatus, VideoReadyInfo, ChunkMeta } from "../lib/joinWebrtc";
 import { SyncMessage } from "../lib/sync";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
 import { VideoOverlay } from "../components/VideoOverlay";
 
-type Status = "connecting" | "waiting-approval" | "connected" | "streaming" | "playing" | "error" | "disconnected" | "denied";
+type Status = "connecting" | "waiting-approval" | "connected" | "streaming" | "playing" | "error" | "disconnected" | "denied" | "host-ended";
 interface ChatMsg { id: string; from: string; text: string; timestamp: number; }
 interface Toast { id: string; from: string; text: string; }
 type CamShape = "circle" | "rounded" | "square";
@@ -54,25 +52,24 @@ export function JoinSession() {
   const suppressControlRef = useRef(0);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const roomUrl = useSessionStore(s => s.joinRoomUrl);
-  const torrentProgress = useSessionStore(s => s.torrentProgress);
+
+  // MSE DataChannel streaming state
+  const mediaSourceRef = useRef<MediaSource | null>(null);
+  const sourceBufferRef = useRef<SourceBuffer | null>(null);
+  const pendingChunks = useRef<ArrayBuffer[]>([]);
+  const isAppending = useRef(false);
+  const nextByte = useRef(0);
+  const fileSizeRef = useRef(0);
+  const durationRef = useRef(0);
+  const pendingRequests = useRef<Map<string, { start: number; end: number }>>(new Map());
+  const CHUNK_SIZE = 128 * 1024; // 128 KB
+  const IN_FLIGHT = 4;
 
   const bufferingLabel = useMemo(() => {
     if (status === "playing") return "Watching";
-    if (status !== "streaming") return "Buffering...";
-    if (!torrentProgress) return "Buffering...";
-
-    if (torrentProgress.totalBytes > 0) {
-      const percent = Math.min(100, (torrentProgress.haveBytes / torrentProgress.totalBytes) * 100);
-      return `Buffering ${percent.toFixed(0)}%`;
-    }
-
-    if (torrentProgress.haveBytes > 0) {
-      const downloadedMb = torrentProgress.haveBytes / (1024 * 1024);
-      return `Buffering ${downloadedMb.toFixed(downloadedMb >= 10 ? 0 : 1)} MB`;
-    }
-
+    if (status === "streaming") return "Buffering...";
     return "Buffering...";
-  }, [status, torrentProgress]);
+  }, [status]);
 
   const openChat = useCallback(() => { setChatMounted(true); requestAnimationFrame(() => setChatOpen(true)); }, []);
   const closeChat = useCallback(() => { setChatOpen(false); setTimeout(() => setChatMounted(false), 300); }, []);
@@ -117,64 +114,116 @@ export function JoinSession() {
     }
   }, []);
 
-  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ─── MSE chunk pump ─────────────────────────────────────────────────────────
 
-  const handleMagnet = useCallback(async (magnet: string, name: string) => {
-    setStatus("streaming"); setFileName(name || "Video");
-
-    // 1. Kick off BitTorrent loading
+  const appendNextChunk = useCallback(() => {
+    if (isAppending.current) return;
+    const sb = sourceBufferRef.current;
+    if (!sb || sb.updating || pendingChunks.current.length === 0) return;
+    isAppending.current = true;
     try {
-      await invoke("load_magnet_link", { magnetLink: magnet });
-    } catch (e: any) {
-      console.warn(`Failed to seed torrent locally: ${e}`);
+      sb.appendBuffer(pendingChunks.current.shift()!);
+    } catch (e) {
+      console.error("[MSE] appendBuffer error:", e);
+      isAppending.current = false;
     }
-
-    // 2. Start a fallback timer. If BitTorrent doesn't find peers (NAT blocked) in 8s, fallback to WebRTC.
-    if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-    fallbackTimerRef.current = setTimeout(() => {
-      console.log("[JoinSession] BitTorrent blocked or slow. Falling back to WebRTC Bridge!");
-      const v = videoRef.current;
-      if (v && v.src === "") {
-        v.src = "/webrtc-media";
-        v.oncanplay = () => {
-          setStatus("playing");
-          if (pendingSyncRef.current && rtcRef.current) {
-            rtcRef.current.applySync(pendingSyncRef.current, v);
-            pendingSyncRef.current = null;
-          }
-        };
-        v.onerror = () => { setError("Video failed to load over WebRTC."); setStatus("error"); };
-      }
-    }, 8000);
   }, []);
 
-  // 3. Listen for successful BitTorrent connection (Public swarms)
-  useEffect(() => {
-    const unlisten = listen("torrent-video-ready", (event: any) => {
-      console.log("[JoinSession] BitTorrent swarm connected successfully.");
-      if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-      
-      const v = videoRef.current;
-      if (!v) return;
-      
-      // If WebRTC hasn't taken over yet, use standard BitTorrent streaming
-      if (v.src === "" || !v.src.includes("webrtc-media")) {
-        v.src = "http://localhost:8787/host-video";
-        v.oncanplay = () => {
+  const pumpChunks = useCallback(() => {
+    const fileSize = fileSizeRef.current;
+    if (fileSize === 0) return;
+    while (pendingRequests.current.size < IN_FLIGHT && nextByte.current < fileSize) {
+      const start = nextByte.current;
+      const end = Math.min(start + CHUNK_SIZE - 1, fileSize - 1);
+      const reqId = crypto.randomUUID();
+      pendingRequests.current.set(reqId, { start, end });
+      rtcRef.current?.requestChunk(start, end, reqId);
+      nextByte.current = end + 1;
+    }
+  }, []);
+
+  const handleMediaChunk = useCallback((data: ArrayBuffer, meta: ChunkMeta) => {
+    pendingRequests.current.delete(meta.reqId);
+    pendingChunks.current.push(data);
+    appendNextChunk();
+    pumpChunks();
+  }, [appendNextChunk, pumpChunks]);
+
+  const handleVideoReady = useCallback((info: VideoReadyInfo) => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    setFileName(info.fileName);
+    setStatus("streaming");
+    fileSizeRef.current = info.fileSize;
+    durationRef.current = info.durationSeconds;
+    nextByte.current = 0;
+    pendingRequests.current.clear();
+    pendingChunks.current = [];
+    isAppending.current = false;
+
+    const ms = new MediaSource();
+    mediaSourceRef.current = ms;
+    v.src = URL.createObjectURL(ms);
+
+    ms.addEventListener("sourceopen", () => {
+      let sb: SourceBuffer;
+      try {
+        sb = ms.addSourceBuffer(info.mimeCodec);
+      } catch (e) {
+        // Fallback to generic MP4 if codec string rejected
+        try { sb = ms.addSourceBuffer("video/mp4"); } catch { return; }
+      }
+      sourceBufferRef.current = sb;
+      ms.duration = info.durationSeconds;
+
+      sb.addEventListener("updateend", () => {
+        isAppending.current = false;
+        appendNextChunk();
+        pumpChunks();
+        // Transition to playing once we have enough data buffered
+        if (v.readyState >= 2 && status !== "playing") {
           setStatus("playing");
+          v.play().catch(() => {});
           if (pendingSyncRef.current && rtcRef.current) {
             rtcRef.current.applySync(pendingSyncRef.current, v);
             pendingSyncRef.current = null;
           }
-        };
-        v.onerror = () => { setError("BitTorrent Video failed to load."); setStatus("error"); };
+        }
+      });
+
+      pumpChunks();
+    }, { once: true });
+
+    // Seeking: snap to 2-second keyframe boundary, re-pump from that position
+    v.addEventListener("seeked", () => {
+      const KEYFRAME_INTERVAL = 2;
+      const bytesPerSec = fileSizeRef.current / (durationRef.current || 1);
+      const snappedSec = Math.floor(v.currentTime / KEYFRAME_INTERVAL) * KEYFRAME_INTERVAL;
+      const seekByte = Math.max(0, Math.floor(snappedSec * bytesPerSec));
+
+      pendingRequests.current.clear();
+      pendingChunks.current = [];
+      isAppending.current = false;
+      nextByte.current = seekByte;
+
+      const sb2 = sourceBufferRef.current;
+      if (sb2 && !sb2.updating) {
+        try { sb2.remove(0, Math.max(0, v.currentTime - 0.5)); } catch {}
       }
+      pumpChunks();
     });
-    return () => {
-      unlisten.then(un => un());
-      if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
-    };
-  }, []);
+
+    v.addEventListener("canplay", () => {
+      if (status !== "playing") {
+        setStatus("playing");
+        if (pendingSyncRef.current && rtcRef.current) {
+          rtcRef.current.applySync(pendingSyncRef.current, v);
+          pendingSyncRef.current = null;
+        }
+      }
+    }, { once: true });
+  }, [appendNextChunk, pumpChunks, status]);
 
   const handleChat = useCallback((msg: ChatMsg) => {
     setChats(prev => [...prev, msg]);
@@ -188,14 +237,18 @@ export function JoinSession() {
   useEffect(() => {
     if (!roomUrl) { setError("No room URL"); setStatus("error"); return; }
     const rtc = new JoinWebRTC(
-      handleMagnet,
+      handleVideoReady,
       handleSync,
       handleChat,
       () => { setStatus("connected"); showToast("Connected to host!", "success"); },
-      () => { setStatus("disconnected"); showToast("Disconnected", "warning"); },
+      () => { setStatus("disconnected"); showToast("Disconnected from host", "warning"); },
       // onJoinDenied
       (reason) => { setError(reason); setStatus("denied"); showToast(reason, "error"); },
-      // onCameraStream — auto-opens; also called on retry
+      // onHostEnded
+      () => { setStatus("host-ended"); },
+      // onMediaChunk
+      handleMediaChunk,
+      // onCameraStream
       (stream, camSt) => {
         setCameraStatus(camSt);
         if (stream) {
@@ -211,7 +264,7 @@ export function JoinSession() {
     setStatus("connecting");
     rtc.connect(roomUrl).then(() => setStatus(prev => prev === "connecting" ? "waiting-approval" : prev));
     return () => { rtc.close(); };
-  }, [handleMagnet, handleSync, handleChat, handleRemoteStream, roomUrl, showToast]);
+  }, [handleVideoReady, handleSync, handleChat, handleMediaChunk, handleRemoteStream, roomUrl, showToast]);
 
   const sendControl = useCallback((action: "play" | "pause" | "seek") => {
     if (Date.now() < suppressControlRef.current) return;
@@ -363,6 +416,16 @@ export function JoinSession() {
           <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 14, padding: "24px 32px", maxWidth: 360, textAlign: "center" }}>
             <p style={{ color: "#f87171", margin: 0, fontSize: 14 }}>{error}</p>
             <button onClick={handleLeave} style={{ ...btnGhost, marginTop: 16 }}>Go Back</button>
+          </div>
+        </div>
+      )}
+      {status === "host-ended" && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.85)", zIndex: 100 }}>
+          <div style={{ background: "rgba(15,15,24,0.97)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 16, padding: "32px 40px", maxWidth: 360, textAlign: "center" }}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>👋</div>
+            <h2 style={{ color: "#f1f5f9", fontSize: 18, fontWeight: 700, margin: "0 0 8px" }}>Session Ended</h2>
+            <p style={{ color: "#94a3b8", fontSize: 14, margin: "0 0 20px" }}>The host has ended the watch party.</p>
+            <button onClick={handleLeave} style={{ background: "rgba(99,102,241,0.2)", border: "1px solid rgba(99,102,241,0.4)", color: "#a5b4fc", borderRadius: 10, padding: "10px 24px", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>Return to Home</button>
           </div>
         </div>
       )}

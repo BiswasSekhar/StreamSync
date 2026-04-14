@@ -16,6 +16,13 @@ export type SignalMessage =
 
 export type ControlMessage =
   | { type: "magnet"; magnet: string; fileName: string; duration: number }
+  | {
+      type: "video-ready";
+      fileName: string;
+      mimeCodec: string;
+      fileSize: number;
+      durationSeconds: number;
+    }
   | { type: "ping"; timestamp: number }
   | { type: "pong"; timestamp: number; serverTime: number };
 
@@ -48,6 +55,9 @@ export interface VideoProbeResult {
   hasHdr: boolean;
   audioCodec: string;
   needsTranscode: boolean;
+  needsRemux: boolean;
+  /** MSE MIME codec string, e.g. 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"' */
+  codecHint: string;
   estimatedEncodeSeconds: number;
   fileSizeBytes: number;
 }

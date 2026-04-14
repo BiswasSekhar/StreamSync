@@ -3,7 +3,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
 import type { TorrentProgressInfo } from "../store/session";
-import { RoomLink } from "../components/RoomLink";
 import { Settings } from "./Settings";
 
 type HomeMode = "landing" | "host" | "join";
@@ -16,7 +15,9 @@ export function Home() {
     createRoom, roomUrl, sessionId, joinRoom,
     showToast, enterSession,
     showSettings, toggleSettings,
+    displayName, setDisplayName,
   } = useSessionStore();
+  const [joinDisplayName, setJoinDisplayName] = useState(() => sessionStorage.getItem("streamsync_name") ?? "");
   const [mode, setMode] = useState<HomeMode>("landing");
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -157,7 +158,9 @@ export function Home() {
       showToast(`Please enter the ${JOIN_CODE_LENGTH}-character room code`, "warning");
       return;
     }
-    // Join room in-app (no browser needed)
+    // Persist display name for receiver
+    const name = joinDisplayName.trim() || `Viewer${Math.floor(Math.random() * 9000) + 1000}`;
+    sessionStorage.setItem("streamsync_name", name);
     joinRoom(url);
   };
 
@@ -276,6 +279,15 @@ export function Home() {
               </div>
 
               <div className="join-input-group" style={{ flexDirection: "column", alignItems: "center", gap: 24, marginTop: 10 }}>
+                {/* Name input for receiver */}
+                <input
+                  type="text"
+                  placeholder="Your display name (optional)"
+                  value={joinDisplayName}
+                  onChange={e => { setJoinDisplayName(e.target.value); sessionStorage.setItem("streamsync_name", e.target.value.trim()); }}
+                  maxLength={30}
+                  style={{ width: 280, padding: "10px 14px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#f1f5f9", fontSize: 14, outline: "none" }}
+                />
                 <div style={{ display: "flex", gap: 12, justifyContent: "center" }} onPaste={handleCodePaste}>
                   {joinCode.map((char, index) => (
                     <input
@@ -420,8 +432,24 @@ export function Home() {
                 </div>
               ) : null}
 
-              {/* Room link (shown after room is created) */}
-              {roomUrl && <RoomLink />}
+              {/* Room code is shown only inside the Session view after host enters it */}
+              {roomUrl && (
+                <div style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 10, padding: "10px 16px", fontSize: 13, color: "#4ade80", textAlign: "center" }}>
+                  Room ready — click "Open Watch Party" to get the share code
+                </div>
+              )}
+
+              {/* Host display name — set before creating room */}
+              {(probeResult || isTorrentSource) && !roomUrl && (
+                <input
+                  type="text"
+                  placeholder="Your display name (Host)"
+                  value={displayName}
+                  onChange={e => setDisplayName(e.target.value)}
+                  maxLength={30}
+                  style={{ width: "100%", padding: "10px 14px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#f1f5f9", fontSize: 14, outline: "none", boxSizing: "border-box" }}
+                />
+              )}
 
               {/* Action buttons */}
               <div className="home-actions">

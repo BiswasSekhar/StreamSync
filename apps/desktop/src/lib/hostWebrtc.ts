@@ -43,9 +43,7 @@ const ICE_BATCH_DELAY = 300; // ms
 export class HostWebRTC {
   private peers = new Map<string, PeerChannels>();
   private pendingApproval = new Map<string, { displayName: string }>();
-  private magnetLink: string | null = null;
-  private fileName: string = '';
-  private videoUrl: string = '';
+  private videoInfo: { fileName: string; mimeCodec: string; fileSize: number; durationSeconds: number; magnetLink?: string } | null = null;
   private localStream: MediaStream | null = null;
   private peerStreams = new Map<string, MediaStream>();
   private syncSeq = 0;
@@ -118,12 +116,10 @@ export class HostWebRTC {
     this.sendSignal({ type: 'join-denied', reason: 'The host declined your request', target: peerId });
   }
 
-  setMagnet(magnet: string, fileName: string, videoUrl: string = '') {
-    this.magnetLink = magnet;
-    this.fileName = fileName;
-    this.videoUrl = videoUrl;
+  setVideoReady(fileName: string, mimeCodec: string, fileSize: number, durationSeconds: number, magnetLink?: string) {
+    this.videoInfo = { fileName, mimeCodec, fileSize, durationSeconds, magnetLink };
     for (const [, peer] of this.peers) {
-      this.sendMagnetToPeer(peer);
+      this.sendVideoReadyToPeer(peer);
     }
   }
 
@@ -160,7 +156,7 @@ export class HostWebRTC {
   }
 
   close() {
-    this.sendSignal({ type: 'leave' });
+    this.sendSignal({ type: 'host-ended', reason: 'session_closed' });
     // Flush all pending ICE batches
     for (const [peerId, peer] of this.peers) {
       this.flushIceBatch(peerId, peer);
@@ -310,7 +306,7 @@ export class HostWebRTC {
     };
     this.peers.set(peerId, peerChannels);
 
-    controlDc.onopen = () => this.sendMagnetToPeer(peerChannels);
+    controlDc.onopen = () => this.sendVideoReadyToPeer(peerChannels);
     chatDc.onmessage = (e) => {
       try {
         this.onChat(JSON.parse(e.data));
@@ -319,32 +315,31 @@ export class HostWebRTC {
 
     mediaDc.onmessage = async (e) => {
       try {
-        // Parse the request from receiver's Service Worker
-        const req = JSON.parse(e.data);
-        if (req.type === 'WEBRTC_CHUNK_REQUEST' && this.videoUrl) {
-          const headers: HeadersInit = {};
-          if (req.range) {
-            headers['Range'] = req.range;
-          }
-          
-          // Request from local Axum server
-          const response = await fetch("http://localhost:8787/host-video", { headers });
-          if (!response.ok && response.status !== 206) {
-             mediaDc.send(JSON.stringify({ type: 'WEBRTC_CHUNK_ERROR', reqId: req.reqId }));
-             return;
-          }
-          
-          const arrayBuffer = await response.arrayBuffer();
-          // Send metadata exactly before sending the binary
-          mediaDc.send(JSON.stringify({
-             type: 'WEBRTC_CHUNK_RESPONSE',
-             reqId: req.reqId,
-             totalSize: response.headers.get('Content-Range')?.split('/')[1] || arrayBuffer.byteLength,
-             contentType: response.headers.get('Content-Type') || 'video/mp4'
-          }));
-          // Send binary payload
-          mediaDc.send(arrayBuffer);
+        const req = JSON.parse(e.data as string);
+        if (req.type !== 'WEBRTC_CHUNK_REQUEST') return;
+
+        // Back-pressure check: don't queue too much data
+        if (mediaDc.bufferedAmount > 16 * 1024 * 1024) {
+          mediaDc.send(JSON.stringify({ type: 'WEBRTC_CHUNK_ERROR', reqId: req.reqId, reason: 'backpressure' }));
+          return;
         }
+
+        const headers: HeadersInit = req.range ? { 'Range': req.range } : {};
+        const response = await fetch('http://localhost:8787/host-video', { headers });
+        if (!response.ok && response.status !== 206) {
+          mediaDc.send(JSON.stringify({ type: 'WEBRTC_CHUNK_ERROR', reqId: req.reqId }));
+          return;
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        // Send metadata first, then binary — receiver correlates by order
+        mediaDc.send(JSON.stringify({
+          type: 'WEBRTC_CHUNK_RESPONSE',
+          reqId: req.reqId,
+          size: arrayBuffer.byteLength,
+          contentRange: response.headers.get('Content-Range') ?? '',
+        }));
+        mediaDc.send(arrayBuffer);
       } catch (err) {
         console.error('[HostWebRTC] Failed to handle mediaDc message', err);
       }
@@ -374,7 +369,22 @@ export class HostWebRTC {
 
     pc.onconnectionstatechange = () => {
       console.log(`[HostWebRTC] Peer ${peerId} state: ${pc.connectionState}`);
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+      if (pc.connectionState === 'disconnected') {
+        // Attempt ICE restart before giving up — handles brief network blips
+        setTimeout(async () => {
+          if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+            try {
+              const iceOffer = await pc.createOffer({ iceRestart: true });
+              await pc.setLocalDescription(iceOffer);
+              this.sendSignal({ type: 'offer', sdp: iceOffer.sdp!, target: peerId });
+            } catch {
+              this.cleanupPeer(peerId);
+              this.onPeerLeft(peerId);
+            }
+          }
+        }, 5000);
+      }
+      if (pc.connectionState === 'failed') {
         this.cleanupPeer(peerId);
         this.onPeerLeft(peerId);
       }
@@ -476,15 +486,17 @@ export class HostWebRTC {
     }
   }
 
-  private sendMagnetToPeer(peer: PeerChannels) {
-    if (!this.magnetLink) return;
+  private sendVideoReadyToPeer(peer: PeerChannels) {
+    if (!this.videoInfo) return;
     if (peer.controlDc?.readyState === 'open') {
       peer.controlDc.send(
         JSON.stringify({
-          type: 'magnet',
-          magnet: this.magnetLink,
-          fileName: this.fileName,
-          videoUrl: this.videoUrl,
+          type: 'video-ready',
+          fileName: this.videoInfo.fileName,
+          mimeCodec: this.videoInfo.mimeCodec,
+          fileSize: this.videoInfo.fileSize,
+          durationSeconds: this.videoInfo.durationSeconds,
+          magnetLink: this.videoInfo.magnetLink ?? null,
         }),
       );
     }
