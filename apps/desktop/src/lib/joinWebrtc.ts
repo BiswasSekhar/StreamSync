@@ -72,6 +72,7 @@ export class JoinWebRTC {
     private onMediaChunk: (data: ArrayBuffer, meta: ChunkMeta) => void = () => {},
     private onCameraStream: (stream: MediaStream | null, status: CameraPermissionStatus) => void = () => {},
     private onRemoteStream: (stream: MediaStream) => void = () => {},
+    private onJoinApproved: () => void = () => {},
   ) {}
 
   /**
@@ -249,7 +250,7 @@ export class JoinWebRTC {
         console.log('[JoinWebRTC] Admission approved by host');
         this.joinApproved = true;
         if (this.joinRetryTimer) { clearTimeout(this.joinRetryTimer); this.joinRetryTimer = null; }
-        // Host will send an offer next — nothing to do yet
+        this.onJoinApproved();
         break;
 
       case 'host-ended':

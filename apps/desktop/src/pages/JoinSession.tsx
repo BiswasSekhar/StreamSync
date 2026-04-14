@@ -259,10 +259,12 @@ export function JoinSession() {
         }
       },
       handleRemoteStream,
+      // onJoinApproved — host clicked Admit; advance UI so user knows they're in
+      () => setStatus(prev => (prev === "connecting" || prev === "waiting-approval") ? "waiting-approval" : prev),
     );
     rtcRef.current = rtc;
     setStatus("connecting");
-    rtc.connect(roomUrl).then(() => setStatus(prev => prev === "connecting" ? "waiting-approval" : prev));
+    rtc.connect(roomUrl);
     return () => { rtc.close(); };
   }, [handleVideoReady, handleSync, handleChat, handleMediaChunk, handleRemoteStream, roomUrl, showToast]);
 
@@ -388,10 +390,11 @@ export function JoinSession() {
         <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
           <Spinner size={36} />
           <p style={{ color: "#94a3b8", fontSize: 15, margin: 0 }}>
-            {status === "waiting-approval" ? "Waiting for host to admit you…" :
-             status === "connected" ? "Waiting for host..." : "Connecting..."}
+            {status === "connecting"      ? "Waiting for host to admit you…" :
+             status === "waiting-approval"? "Admitted — setting up stream…" :
+             status === "connected"       ? "Connected — loading video…" : "Connecting…"}
           </p>
-          {status === "waiting-approval" && (
+          {status === "connecting" && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.25)", borderRadius: 10, padding: "10px 16px", maxWidth: 340, textAlign: "center" }}>
               <span style={{ fontSize: 18 }}>🔒</span>
               <span style={{ color: "#a5b4fc", fontSize: 13, lineHeight: 1.45 }}>
