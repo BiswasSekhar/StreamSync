@@ -35,6 +35,11 @@ pub async fn load_torrent_file(
     let torrent_path = std::path::PathBuf::from(&path);
 
     {
+        let mut torrent_stream = state.torrent_stream.lock().await;
+        *torrent_stream = None;
+    }
+
+    {
         let mut guard = current_file.write().await;
         *guard = None;
     }
@@ -75,6 +80,11 @@ pub async fn start_seeding_original(
     current_file: State<'_, CurrentFilePath>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
+    {
+        let mut torrent_stream = state.torrent_stream.lock().await;
+        *torrent_stream = None;
+    }
+
     // Update shared file path so /host-video can serve it
     {
         let mut guard = current_file.write().await;
@@ -106,6 +116,11 @@ pub async fn prepare_video_for_streaming(
     current_file: State<'_, CurrentFilePath>,
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
+    {
+        let mut torrent_stream = state.torrent_stream.lock().await;
+        *torrent_stream = None;
+    }
+
     let probe = probe_video(&path).await.map_err(|e| e.to_string())?;
 
     let state_clone = Arc::clone(&state);

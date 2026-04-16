@@ -166,6 +166,13 @@ pub struct TorrentState {
     pub file_name: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct TorrentStreamSource {
+    pub handle: Arc<librqbit::ManagedTorrent>,
+    pub file_id: usize,
+    pub content_type: String,
+}
+
 pub struct TunnelState {
     pub public_url: String,
     pub child_pid: Option<u32>,
@@ -192,6 +199,7 @@ pub struct AppState {
     pub tunnel: Mutex<Option<TunnelState>>,
     pub tunnel_child: Mutex<Option<tokio::process::Child>>,
     pub peers: Mutex<HashMap<String, PeerState>>,
+    pub torrent_stream: Mutex<Option<TorrentStreamSource>>,
     pub event_tx: broadcast::Sender<AppEvent>,
     pub sync_sequence: std::sync::atomic::AtomicU64,
 }
@@ -207,6 +215,7 @@ impl AppState {
             tunnel: Mutex::new(None),
             tunnel_child: Mutex::new(None),
             peers: Mutex::new(HashMap::new()),
+            torrent_stream: Mutex::new(None),
             event_tx,
             sync_sequence: std::sync::atomic::AtomicU64::new(0),
         })

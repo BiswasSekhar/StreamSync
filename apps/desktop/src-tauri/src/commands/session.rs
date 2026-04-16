@@ -40,6 +40,8 @@ pub async fn close_room(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
     crate::engine::tunnel::stop_tunnel(&state).await;
+    let mut torrent_stream = state.torrent_stream.lock().await;
+    *torrent_stream = None;
     let mut sess = state.session.lock().await;
     *sess = None;
     let mut peers = state.peers.lock().await;
@@ -77,5 +79,4 @@ pub async fn get_session_status(
         })).collect::<Vec<_>>(),
     }))
 }
-
 

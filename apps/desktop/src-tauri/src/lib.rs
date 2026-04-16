@@ -50,6 +50,7 @@ pub fn run() {
                     8787,
                     dist_path,
                     cf,
+                    app_state.clone(),
                 )
                 .await
                 {

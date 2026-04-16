@@ -17,6 +17,8 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
+use crate::state::AppState;
+
 #[derive(Clone)]
 struct PeerSender {
     id: String,
@@ -31,15 +33,17 @@ pub type CurrentFilePath = Arc<RwLock<Option<String>>>;
 struct SignallerState {
     rooms: RoomMap,
     current_file: CurrentFilePath,
+    app_state: Arc<AppState>,
 }
 
 pub async fn create_signalling_server(
     port: u16,
     web_dist: Option<String>,
     current_file: CurrentFilePath,
+    app_state: Arc<AppState>,
 ) -> anyhow::Result<()> {
     let rooms: RoomMap = Arc::new(Mutex::new(HashMap::new()));
-    let state = SignallerState { rooms, current_file };
+    let state = SignallerState { rooms, current_file, app_state };
 
     let mut router = Router::new()
         .route("/ws", get(ws_handler))
@@ -235,6 +239,10 @@ async fn video_stream_handler(
     State(state): State<SignallerState>,
     headers: HeaderMap,
 ) -> Response {
+    if let Some(stream_source) = state.app_state.torrent_stream.lock().await.clone() {
+        return torrent_video_stream_response(stream_source, headers).await;
+    }
+
     let file_path = {
         let guard = state.current_file.read().await;
         match guard.as_ref() {
@@ -321,4 +329,61 @@ async fn video_stream_handler(
         response_headers.insert(header::CONTENT_LENGTH, chunk_size.to_string().parse().unwrap());
         (StatusCode::OK, response_headers, body).into_response()
     }
+}
+
+async fn torrent_video_stream_response(
+    source: crate::state::TorrentStreamSource,
+    headers: HeaderMap,
+) -> Response {
+    use tokio::io::AsyncSeekExt;
+
+    let mut stream = match source.handle.stream(source.file_id) {
+        Ok(stream) => stream,
+        Err(error) => {
+            tracing::error!("Failed to open torrent stream: {}", error);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Cannot open torrent stream").into_response();
+        }
+    };
+
+    let total_len = stream.len();
+    if total_len == 0 {
+        return (StatusCode::NOT_FOUND, "Empty torrent stream").into_response();
+    }
+
+    let mut status = StatusCode::OK;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(header::CONTENT_TYPE, source.content_type.parse().unwrap());
+    response_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+    response_headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
+
+    let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).unwrap_or("");
+    if let Some(offset) = range_header
+        .strip_prefix("bytes=")
+        .and_then(|v| v.strip_suffix('-'))
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        if offset < total_len {
+            status = StatusCode::PARTIAL_CONTENT;
+            if let Err(error) = stream.seek(std::io::SeekFrom::Start(offset)).await {
+                tracing::error!("Failed to seek torrent stream: {}", error);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Seek failed").into_response();
+            }
+
+            response_headers.insert(
+                header::CONTENT_LENGTH,
+                (total_len - stream.position()).to_string().parse().unwrap(),
+            );
+            response_headers.insert(
+                header::CONTENT_RANGE,
+                format!("bytes {}-{}/{}", stream.position(), total_len.saturating_sub(1), total_len)
+                    .parse()
+                    .unwrap(),
+            );
+        }
+    } else {
+        response_headers.insert(header::CONTENT_LENGTH, total_len.to_string().parse().unwrap());
+    }
+
+    let body = Body::from_stream(tokio_util::io::ReaderStream::with_capacity(stream, 65_536));
+    (status, response_headers, body).into_response()
 }

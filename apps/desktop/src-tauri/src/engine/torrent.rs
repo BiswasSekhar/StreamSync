@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use tauri::Emitter;
 
-use crate::state::{AppState, AppEvent, TorrentState};
+use crate::state::{AppState, AppEvent, TorrentState, TorrentStreamSource};
 
 const DEFAULT_TRACKERS: &[&str] = &[
     "udp://tracker.opentrackr.org:1337/announce",
@@ -25,6 +25,63 @@ fn append_trackers_to_magnet(mut magnet: String) -> String {
         magnet.push_str(&urlencoding::encode(tracker));
     }
     magnet
+}
+
+#[derive(Clone)]
+struct SelectedVideoFile {
+    file_id: usize,
+    content_type: String,
+}
+
+fn guess_video_content_type(file_name: &str) -> String {
+    match file_name
+        .rsplit('.')
+        .next()
+        .unwrap_or("mp4")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mkv" => "video/x-matroska".to_string(),
+        "mp4" | "m4v" => "video/mp4".to_string(),
+        "webm" => "video/webm".to_string(),
+        "avi" => "video/x-msvideo".to_string(),
+        "mov" => "video/quicktime".to_string(),
+        "ts" => "video/mp2t".to_string(),
+        _ => "video/mp4".to_string(),
+    }
+}
+
+fn pick_primary_video_file(handle: &Arc<librqbit::ManagedTorrent>) -> Option<SelectedVideoFile> {
+    const VIDEO_EXTS: &[&str] = &["mp4", "mkv", "avi", "mov", "webm", "ts", "m4v", "wmv"];
+
+    handle.with_metadata(|metadata| {
+        metadata
+            .file_infos
+            .iter()
+            .enumerate()
+            .filter_map(|(file_id, file)| {
+                let file_name = file.relative_filename.to_string_lossy().to_string();
+                let ext = std::path::Path::new(&file_name)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.to_ascii_lowercase())?;
+                if !VIDEO_EXTS.contains(&ext.as_str()) {
+                    return None;
+                }
+
+                Some(SelectedVideoFile {
+                    file_id,
+                    content_type: guess_video_content_type(&file_name),
+                })
+            })
+            .max_by_key(|file| {
+                metadata
+                    .file_infos
+                    .get(file.file_id)
+                    .map(|info| info.len)
+                    .unwrap_or(0)
+            })
+    }).ok().flatten()
 }
 
 /// Start seeding a completed file as a torrent using librqbit.
@@ -210,6 +267,15 @@ pub async fn load_external_torrent(
         }
     };
 
+    if let Some(video_file) = pick_primary_video_file(&handle) {
+        let mut torrent_stream = state.torrent_stream.lock().await;
+        *torrent_stream = Some(TorrentStreamSource {
+            handle: handle.clone(),
+            file_id: video_file.file_id,
+            content_type: video_file.content_type,
+        });
+    }
+
     let info_hash = handle.info_hash();
     let hash_hex = hex::encode(info_hash.0);
 
@@ -333,6 +399,15 @@ pub async fn load_magnet(
             return Err(anyhow::anyhow!("Unexpected ListOnly response"));
         }
     };
+
+    if let Some(video_file) = pick_primary_video_file(&handle) {
+        let mut torrent_stream = state.torrent_stream.lock().await;
+        *torrent_stream = Some(TorrentStreamSource {
+            handle: handle.clone(),
+            file_id: video_file.file_id,
+            content_type: video_file.content_type,
+        });
+    }
 
     tracing::info!("Magnet link torrent added to session");
 
