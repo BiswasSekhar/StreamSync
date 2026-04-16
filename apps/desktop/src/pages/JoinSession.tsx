@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { JoinWebRTC, CameraPermissionStatus, VideoReadyInfo, ChunkMeta } from "../lib/joinWebrtc";
 import { SyncMessage } from "../lib/sync";
 import { useSessionStore } from "../store/session";
@@ -49,9 +50,8 @@ export function JoinSession() {
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const rtcRef = useRef<JoinWebRTC | null>(null);
   const pendingSyncRef = useRef<SyncMessage | null>(null);
-  const torrentClientRef = useRef<any>(null);
-  const torrentFallbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const objectUrlRef = useRef<string | null>(null);
+  const awaitingNativeTorrentRef = useRef(false);
   // Mirror of `status` kept in a ref so callbacks can read the latest value
   // without capturing it as a closure dep (which would make handleVideoReady
   // unstable and cause the main useEffect to re-run on every status change).
@@ -60,6 +60,7 @@ export function JoinSession() {
   const suppressControlRef = useRef(0);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const roomUrl = useSessionStore(s => s.joinRoomUrl);
+  const localTorrentFilePath = useSessionStore(s => s.filePath);
 
   // MSE DataChannel streaming state
   const mediaSourceRef = useRef<MediaSource | null>(null);
@@ -72,7 +73,6 @@ export function JoinSession() {
   const pendingRequests = useRef<Map<string, { start: number; end: number }>>(new Map());
   const CHUNK_SIZE = 128 * 1024; // 128 KB
   const IN_FLIGHT = 4;
-  const WEBTORRENT_TIMEOUT_MS = 30_000;
 
   const bufferingLabel = useMemo(() => {
     if (status === "playing") return "Watching";
@@ -124,13 +124,7 @@ export function JoinSession() {
   }, []);
 
   const cleanupPlaybackTransport = useCallback((resetVideo = true) => {
-    if (torrentFallbackTimer.current) {
-      clearTimeout(torrentFallbackTimer.current);
-      torrentFallbackTimer.current = null;
-    }
-
-    torrentClientRef.current?.destroy().catch(() => {});
-    torrentClientRef.current = null;
+    awaitingNativeTorrentRef.current = false;
 
     pendingRequests.current.clear();
     pendingChunks.current = [];
@@ -242,6 +236,7 @@ export function JoinSession() {
     if (!v) return;
 
     cleanupPlaybackTransport(false);
+    awaitingNativeTorrentRef.current = false;
     console.log("[MSE] Video ready:", { fileName: info.fileName, fileSize: info.fileSize, duration: info.durationSeconds, mimeCodec: info.mimeCodec });
 
     setFileName(info.fileName);
@@ -324,73 +319,38 @@ export function JoinSession() {
     }, { once: true });
   }, [appendNextChunk, cleanupPlaybackTransport, pumpChunks]);
 
-  const startWebTorrent = useCallback((magnetLink: string, info: VideoReadyInfo) => {
-    const WT = (window as Window & { WebTorrent?: any }).WebTorrent;
-    const video = videoRef.current;
-    if (!WT || !video) {
-      startMSE(info);
-      return;
-    }
-
+  const startNativeTorrent = useCallback(async (info: VideoReadyInfo) => {
     cleanupPlaybackTransport(false);
+    awaitingNativeTorrentRef.current = true;
     setFileName(info.fileName);
     setStatus("streaming");
-
-    const client = new WT();
-    torrentClientRef.current = client;
-
-    const fallbackTimer = setTimeout(() => {
-      console.log("[JoinSession] WebTorrent: no peers within timeout, falling back to DataChannel");
-      client.destroy().catch(() => {});
-      torrentClientRef.current = null;
-      startMSE(info);
-    }, WEBTORRENT_TIMEOUT_MS);
-    torrentFallbackTimer.current = fallbackTimer;
-
-    client.add(magnetLink, (torrent: any) => {
-      if (torrentFallbackTimer.current) {
-        clearTimeout(torrentFallbackTimer.current);
-        torrentFallbackTimer.current = null;
-      }
-
-      const videoFile = torrent.files.find((file: any) =>
-        [".mp4", ".mkv", ".avi", ".mov", ".webm", ".ts", ".m4v", ".wmv"].some((ext) =>
-          String(file.name).toLowerCase().endsWith(ext),
-        ),
-      );
-
-      if (!videoFile) {
-        console.warn("[JoinSession] WebTorrent: no video file found, falling back to DataChannel");
-        client.destroy().catch(() => {});
-        torrentClientRef.current = null;
-        startMSE(info);
-        return;
-      }
-
-      videoFile.renderTo(video, (err: unknown) => {
-        if (err) {
-          console.warn("[JoinSession] WebTorrent renderTo failed, falling back to DataChannel", err);
-          client.destroy().catch(() => {});
-          torrentClientRef.current = null;
-          startMSE(info);
-          return;
-        }
-        setStatus("playing");
-      });
+    useSessionStore.setState({
+      filePath: null,
+      probeResult: null,
+      isTorrentSource: true,
+      torrentFileName: info.fileName,
+      torrentProgress: null,
+      magnetLink: info.magnetLink ?? null,
     });
 
-    client.on("error", (err: unknown) => {
-      console.warn("[JoinSession] WebTorrent error:", err);
-    });
-  }, [cleanupPlaybackTransport, startMSE, WEBTORRENT_TIMEOUT_MS]);
+    try {
+      console.log("[JoinSession] Starting native torrent receiver");
+      await invoke("load_magnet_link", { magnetLink: info.magnetLink });
+    } catch (error) {
+      awaitingNativeTorrentRef.current = false;
+      console.error("[JoinSession] Failed to start native torrent receiver", error);
+      showToast(`Failed to load torrent: ${error}`, "error");
+      setStatus("error");
+    }
+  }, [cleanupPlaybackTransport, showToast]);
 
   const handleVideoReady = useCallback((info: VideoReadyInfo) => {
-    if (info.magnetLink && (window as Window & { WebTorrent?: any }).WebTorrent) {
-      startWebTorrent(info.magnetLink, info);
+    if (info.magnetLink) {
+      void startNativeTorrent(info);
       return;
     }
     startMSE(info);
-  }, [startMSE, startWebTorrent]);
+  }, [startMSE, startNativeTorrent]);
 
   const handleChat = useCallback((msg: ChatMsg) => {
     setChats(prev => [...prev, msg]);
@@ -418,6 +378,40 @@ export function JoinSession() {
     setStatus("denied");
     showToast(reason, "error");
   }, [cleanupPlaybackTransport, showToast]);
+
+  useEffect(() => {
+    if (!awaitingNativeTorrentRef.current || !localTorrentFilePath) return;
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    const localHostVideoUrl = `http://localhost:8787/host-video?t=${Date.now()}`;
+    console.log("[JoinSession] Native torrent video ready:", localHostVideoUrl);
+
+    const handleCanPlay = () => {
+      if (statusRef.current !== "playing") {
+        setStatus("playing");
+      }
+      if (pendingSyncRef.current && rtcRef.current) {
+        rtcRef.current.applySync(pendingSyncRef.current, video);
+        pendingSyncRef.current = null;
+      }
+    };
+
+    const handleError = () => {
+      console.error("[JoinSession] Native torrent playback failed");
+      awaitingNativeTorrentRef.current = false;
+      video.removeEventListener("canplay", handleCanPlay);
+      video.removeEventListener("error", handleError);
+      showToast("Torrent video playback failed", "error");
+      setStatus("error");
+    };
+
+    video.addEventListener("canplay", handleCanPlay, { once: true });
+    video.addEventListener("error", handleError, { once: true });
+    video.src = localHostVideoUrl;
+    video.load();
+  }, [localTorrentFilePath, showToast]);
 
   useEffect(() => {
     if (!roomUrl) { setError("No room URL"); setStatus("error"); return; }
