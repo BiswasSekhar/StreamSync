@@ -83,7 +83,9 @@ export class HostWebRTC {
       }
     };
 
-    this.ws.onerror = () => this.onError("WebSocket signalling connection failed");
+    this.ws.onerror = () => {
+      console.warn("[HostWebRTC] WebSocket signalling connection error");
+    };
   }
 
   /** Host approves a pending join request */

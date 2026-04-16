@@ -102,7 +102,7 @@ export class ReceiverWebRTC {
     };
 
     this.ws.onerror = () => {
-      this.onDisconnected();
+      console.warn("[ReceiverWebRTC] WebSocket signalling connection error");
     };
 
     // Join-request is sent once room-joined arrives and host peer is known.
