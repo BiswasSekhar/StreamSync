@@ -62,7 +62,8 @@ pub async fn stop_tunnel(state: &AppState) {
 pub async fn start_tunnel(port: u16) -> anyhow::Result<TunnelProcess> {
     let cloudflared_path = get_cloudflared_path()?;
 
-    let mut child = Command::new(&cloudflared_path)
+    let mut command = Command::new(&cloudflared_path);
+    command
         .args([
             "tunnel",
             "--url",
@@ -72,8 +73,14 @@ pub async fn start_tunnel(port: u16) -> anyhow::Result<TunnelProcess> {
             "info",
         ])
         .stderr(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .creation_flags(0x08000000)
+        .stdout(std::process::Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(0x08000000);
+    }
+
+    let mut child = command
         .spawn()
         .context("Failed to spawn cloudflared")?;
 
