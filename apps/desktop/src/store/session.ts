@@ -11,6 +11,57 @@ function isTauriRuntime(): boolean {
   return Boolean(w.__TAURI__ || w.__TAURI_INTERNALS__);
 }
 
+const TORRENT_PROBE_RETRY_MS = 2_000;
+const TORRENT_PROBE_MAX_ATTEMPTS = 120;
+
+let torrentProbeRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let torrentProbeRetryPath: string | null = null;
+
+function clearTorrentProbeRetry(path?: string) {
+  if (path && torrentProbeRetryPath !== path) return;
+  if (torrentProbeRetryTimer) {
+    clearTimeout(torrentProbeRetryTimer);
+    torrentProbeRetryTimer = null;
+  }
+  if (!path || torrentProbeRetryPath === path) {
+    torrentProbeRetryPath = null;
+  }
+}
+
+function scheduleTorrentProbe(path: string, attemptsLeft = TORRENT_PROBE_MAX_ATTEMPTS) {
+  clearTorrentProbeRetry();
+  torrentProbeRetryPath = path;
+  torrentProbeRetryTimer = setTimeout(() => {
+    void attemptTorrentProbe(path, attemptsLeft);
+  }, TORRENT_PROBE_RETRY_MS);
+}
+
+async function attemptTorrentProbe(path: string, attemptsLeft = TORRENT_PROBE_MAX_ATTEMPTS) {
+  if (!isTauriRuntime()) return;
+
+  try {
+    const probe = await invoke<VideoProbeResult>("probe_file", { path });
+    clearTorrentProbeRetry(path);
+    const state = useSessionStore.getState();
+    if (!state.isTorrentSource || state.filePath !== path) return;
+    useSessionStore.setState({ probeResult: probe, filePath: path });
+  } catch (error) {
+    if (attemptsLeft <= 1) {
+      clearTorrentProbeRetry(path);
+      console.warn("[session] Torrent video probe did not succeed in time:", error);
+      return;
+    }
+
+    const state = useSessionStore.getState();
+    if (!state.isTorrentSource || state.filePath !== path) {
+      clearTorrentProbeRetry(path);
+      return;
+    }
+
+    scheduleTorrentProbe(path, attemptsLeft - 1);
+  }
+}
+
 export interface EncodeProgress {
   percent: number;
   fps: number;
@@ -172,6 +223,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   roomCodeVisible: false,
 
   setFile: async (path) => {
+    clearTorrentProbeRetry();
     // Route .torrent files to the dedicated loader
     const ext = path.split(".").pop()?.toLowerCase();
     if (ext === "torrent") {
@@ -196,6 +248,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   loadTorrent: async (path) => {
+    clearTorrentProbeRetry();
     try {
       await invoke("load_torrent_file", { path });
       const torrentFileName = path.split(/[\\/]/).pop() ?? "Unknown torrent";
@@ -249,6 +302,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   leaveSession: () => {
+    clearTorrentProbeRetry();
     const { roomUrl } = get();
 
     // If the host leaves, close the room so peers do not hang waiting for a host
@@ -277,17 +331,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   play: () => {
     set({ isPlaying: true });
-    invoke("send_host_sync", { position: get().position, playing: true }).catch(console.error);
   },
 
   pause: () => {
     set({ isPlaying: false });
-    invoke("send_host_sync", { position: get().position, playing: false }).catch(console.error);
   },
 
   seek: (position) => {
     set({ position });
-    invoke("send_host_sync", { position, playing: get().isPlaying }).catch(console.error);
   },
 
   sendChat: async (text) => {
@@ -310,6 +361,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   closeRoom: async () => {
+    clearTorrentProbeRetry();
     try {
       await invoke("close_room");
     } catch {
@@ -432,18 +484,10 @@ export function initEventListeners() {
 
   on<{ fileName: string; filePath: string }>("torrent-video-ready", async ({ payload }) => {
     useSessionStore.setState({ torrentFileName: payload.fileName });
-    // Probe the downloaded video file to get codec info for WebRTC streaming
-    try {
-      const probe = await invoke<VideoProbeResult>("probe_file", { path: payload.filePath });
-      useSessionStore.setState({
-        probeResult: probe,
-        filePath: payload.filePath, // point to the actual video, not the .torrent
-      });
-    } catch {
-      // Probe failed (file still partial) — set filePath so /host-video can serve it
-      // Session.tsx will call setVideoReady once probeResult arrives
-      useSessionStore.setState({ filePath: payload.filePath });
-    }
+    // Point the player at the discovered video immediately, then keep retrying
+    // ffprobe until the partially-downloaded file becomes probeable.
+    useSessionStore.setState({ filePath: payload.filePath });
+    await attemptTorrentProbe(payload.filePath);
     useSessionStore.getState().showToast(`Torrent video ready: ${payload.fileName}`, "success");
   });
 
