@@ -95,6 +95,16 @@ export class TrackerSignallingMesh {
     return this.peerId;
   }
 
+  getConnectedTrackerCount(): number {
+    let count = 0;
+    for (const socket of this.sockets.values()) {
+      if (socket.readyState === WebSocket.OPEN) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   connect() {
     this.closed = false;
     for (const trackerUrl of this.trackerUrls) {
@@ -121,10 +131,18 @@ export class TrackerSignallingMesh {
     this.reconnectTimers.clear();
 
     for (const [trackerUrl, socket] of this.sockets) {
-      this.sendPresence(socket, trackerUrl, "stopped");
-      try {
-        socket.close();
-      } catch {}
+      if (socket.readyState === WebSocket.OPEN) {
+        this.sendPresence(socket, trackerUrl, "stopped");
+        try {
+          socket.close();
+        } catch {}
+      } else if (socket.readyState === WebSocket.CONNECTING) {
+        socket.onopen = () => {
+          try {
+            socket.close();
+          } catch {}
+        };
+      }
     }
     this.sockets.clear();
   }

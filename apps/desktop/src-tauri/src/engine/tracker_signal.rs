@@ -5,11 +5,10 @@ use serde_json::Value;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
-pub const DEFAULT_TRACKERS: [&str; 4] = [
-    "wss://tracker.webtorrent.dev",
-    "wss://tracker.btorrent.xyz",
+pub const DEFAULT_TRACKERS: [&str; 3] = [
     "wss://tracker.files.fm:7073/announce",
     "wss://tracker.openwebtorrent.com",
+    "wss://tracker.webtorrent.dev",
 ];
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

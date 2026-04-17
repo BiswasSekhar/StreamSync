@@ -47,6 +47,9 @@ export class JoinWebRTC {
 
   private ws: WebSocket | null = null;
   private trackerSignalling: TrackerSignallingMesh | null = null;
+  private wsEndpoint: string | null = null;
+  private wsReconnectAttempts = 0;
+  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private myPeerId: string | null = null;
   private roomId: string | null = null;
@@ -58,6 +61,7 @@ export class JoinWebRTC {
 
   // Join-request retry with exponential backoff
   private joinRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private trackerConnectivityTimer: ReturnType<typeof setTimeout> | null = null;
   private joinApproved = false;
   private joinRetryCount = 0;
   private syncHeartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -91,6 +95,12 @@ export class JoinWebRTC {
     this.joinApproved = false;
     this.joinRetryCount = 0;
     this.hostPeerId = null;
+    this.wsEndpoint = null;
+    this.wsReconnectAttempts = 0;
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = null;
+    }
     if (this.joinRetryTimer) {
       clearTimeout(this.joinRetryTimer);
       this.joinRetryTimer = null;
@@ -105,13 +115,32 @@ export class JoinWebRTC {
 
     const url = new URL(fullUrl);
     const wsBase = fullUrl.split("?")[0];
-    const wsUrl = wsBase.replace(/^https?/, "wss").replace(/^http/, "ws");
+    const wsUrl = wsBase
+      .replace(/^https:\/\//i, "wss://")
+      .replace(/^http:\/\//i, "ws://");
     const wsUrlFixed = wsUrl.endsWith("/") ? wsUrl + "ws" : wsUrl + "/ws";
     this.roomId = (url.searchParams.get("room") ?? "").trim().toUpperCase();
 
-    this.ws = new WebSocket(wsUrlFixed);
+    if (!this.roomId) {
+      this.onJoinDenied("Invalid room URL: missing room id.");
+      return;
+    }
+
+    this.wsEndpoint = wsUrlFixed;
+    this.openTunnelWebSocket();
+  }
+
+  private openTunnelWebSocket() {
+    if (this.closed || !this.wsEndpoint || !this.roomId) return;
+
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+
+    this.ws = new WebSocket(this.wsEndpoint);
 
     this.ws.onopen = () => {
+      this.wsReconnectAttempts = 0;
       this.startPingLoop();
       this.ws?.send(JSON.stringify({
         type: "join",
@@ -122,9 +151,9 @@ export class JoinWebRTC {
 
     this.ws.onmessage = async (e) => {
       try {
-        const msg = JSON.parse(e.data);
+        const msg = JSON.parse(e.data) as SignallingMessage & { type: string; peerId?: string; existingPeers?: Array<{ peerId: string }> };
         if (msg.type === "room-joined") {
-          this.myPeerId = msg.peerId;
+          this.myPeerId = msg.peerId ?? null;
           const host = (msg.existingPeers ?? [])[0]?.peerId;
           if (host) {
             this.hostPeerId = host;
@@ -135,7 +164,7 @@ export class JoinWebRTC {
           }
           return;
         }
-        await this.handleSignal(msg, msg.peerId);
+        await this.handleSignal(msg, msg.peerId ?? "");
       } catch (err) {
         console.warn("[JoinWebRTC] Failed to parse signal:", err);
       }
@@ -145,7 +174,31 @@ export class JoinWebRTC {
       console.warn("[JoinWebRTC] WebSocket signalling connection error");
     };
 
-    // Join-request is sent when room-joined arrives and host peer is known.
+    this.ws.onclose = () => {
+      this.ws = null;
+      if (this.pingInterval) {
+        clearInterval(this.pingInterval);
+        this.pingInterval = null;
+      }
+
+      if (this.closed) return;
+
+      const shouldRetry = !this.joinApproved && !this.initialOfferResolved;
+      if (!shouldRetry) {
+        this.onDisconnected();
+        return;
+      }
+
+      if (this.wsReconnectTimer) return;
+      this.wsReconnectAttempts += 1;
+      const delay = Math.min(2_000 * this.wsReconnectAttempts, 10_000);
+      console.warn(`[JoinWebRTC] Signalling socket closed; reconnecting in ${delay}ms (attempt ${this.wsReconnectAttempts})`);
+
+      this.wsReconnectTimer = setTimeout(() => {
+        this.wsReconnectTimer = null;
+        this.openTunnelWebSocket();
+      }, delay);
+    };
   }
 
   /**
@@ -213,6 +266,16 @@ export class JoinWebRTC {
 
   close() {
     this.closed = true;
+    this.wsEndpoint = null;
+    this.wsReconnectAttempts = 0;
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = null;
+    }
+    if (this.trackerConnectivityTimer) {
+      clearTimeout(this.trackerConnectivityTimer);
+      this.trackerConnectivityTimer = null;
+    }
     // Cancel join retry timer
     if (this.joinRetryTimer) { clearTimeout(this.joinRetryTimer); this.joinRetryTimer = null; }
     // In React StrictMode, an eager cleanup can happen before the real session is
@@ -279,6 +342,10 @@ export class JoinWebRTC {
       trackerUrls,
       onSignal: (signal, senderPeerId) => this.handleSignal(signal, senderPeerId),
       onOpen: () => {
+        if (this.trackerConnectivityTimer) {
+          clearTimeout(this.trackerConnectivityTimer);
+          this.trackerConnectivityTimer = null;
+        }
         if (this.closed || this.joinApproved) return;
         this.sendSignal({ type: "join-request", displayName: getDisplayName(), target: this.hostPeerId ?? undefined });
         if (!this.joinRetryTimer) {
@@ -291,6 +358,16 @@ export class JoinWebRTC {
     });
     this.myPeerId = this.trackerSignalling.getPeerId();
     this.trackerSignalling.connect();
+
+    if (this.trackerConnectivityTimer) {
+      clearTimeout(this.trackerConnectivityTimer);
+    }
+    this.trackerConnectivityTimer = setTimeout(() => {
+      if (!this.trackerSignalling) return;
+      if (this.trackerSignalling.getConnectedTrackerCount() > 0) return;
+      this.onJoinDenied("No tracker connection established. Ask the host for a Tunnel fallback URL.");
+      this.close();
+    }, 12_000);
   }
 
   private startJoinRetry() {
@@ -370,6 +447,20 @@ export class JoinWebRTC {
     if (!senderPubkey) return;
 
     switch (msg.type) {
+      case 'peer-joined': {
+        if (!this.hostPeerId) {
+          this.hostPeerId = msg.peerId || senderPubkey;
+        }
+        if (!this.hostPeerId || this.joinApproved || this.closed) {
+          break;
+        }
+        this.sendSignal({ type: 'join-request', displayName: getDisplayName(), target: this.hostPeerId });
+        if (!this.joinRetryTimer) {
+          this.startJoinRetry();
+        }
+        break;
+      }
+
       case 'join-approved':
         if (!this.hostPeerId) {
           this.hostPeerId = senderPubkey;

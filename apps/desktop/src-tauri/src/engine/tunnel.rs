@@ -90,6 +90,9 @@ pub async fn start_tunnel(port: u16) -> anyhow::Result<TunnelProcess> {
         .ok_or_else(|| anyhow!("Failed to capture cloudflared stderr"))?;
 
     let public_url = extract_tunnel_url(stderr).await?;
+    tracing::info!("cloudflared tunnel URL: {}", public_url);
+    wait_for_tunnel_ready(&public_url).await?;
+    tracing::info!("cloudflared tunnel is reachable at {}/ws", public_url.trim_end_matches('/'));
     Ok(TunnelProcess { child, public_url })
 }
 
@@ -133,4 +136,43 @@ async fn extract_tunnel_url(stderr: tokio::process::ChildStderr) -> anyhow::Resu
     })
     .await
     .map_err(|_| anyhow!("Timeout waiting for cloudflared tunnel URL (45s)"))?
+}
+
+async fn wait_for_tunnel_ready(public_url: &str) -> anyhow::Result<()> {
+    let probe_url = format!("{}/ws", public_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(tokio::time::Duration::from_secs(5))
+        .build()
+        .context("Failed to create tunnel readiness probe client")?;
+
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(25);
+    let mut last_reason = String::from("no response");
+
+    while tokio::time::Instant::now() < deadline {
+        match client.get(&probe_url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success()
+                    || status.as_u16() == 400
+                    || status.as_u16() == 404
+                    || status.as_u16() == 405
+                    || status.as_u16() == 426
+                {
+                    return Ok(());
+                }
+                last_reason = format!("status {}", status);
+            }
+            Err(error) => {
+                last_reason = error.to_string();
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(900)).await;
+    }
+
+    Err(anyhow!(
+        "Tunnel URL {} did not become ready in time ({})",
+        probe_url,
+        last_reason
+    ))
 }

@@ -55,6 +55,7 @@ export class HostWebRTC {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private staleSweepInterval: ReturnType<typeof setInterval> | null = null;
+  private trackerConnectivityTimer: ReturnType<typeof setTimeout> | null = null;
   private peerLastSeenAt = new Map<string, number>();
   private roomId: string | null = null;
 
@@ -175,6 +176,10 @@ export class HostWebRTC {
     if (this.pingInterval) clearInterval(this.pingInterval);
     if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
     if (this.staleSweepInterval) clearInterval(this.staleSweepInterval);
+    if (this.trackerConnectivityTimer) {
+      clearTimeout(this.trackerConnectivityTimer);
+      this.trackerConnectivityTimer = null;
+    }
     this.trackerSignalling?.close();
     this.trackerSignalling = null;
     this.ws?.close();
@@ -206,6 +211,10 @@ export class HostWebRTC {
       trackerUrls,
       onSignal: (signal, senderPeerId) => this.handleSignal(signal, senderPeerId),
       onOpen: () => {
+        if (this.trackerConnectivityTimer) {
+          clearTimeout(this.trackerConnectivityTimer);
+          this.trackerConnectivityTimer = null;
+        }
         this.startPeerHealthLoops();
       },
       onWarning: (warning) => {
@@ -215,6 +224,15 @@ export class HostWebRTC {
     this.myPeerId = this.trackerSignalling.getPeerId();
     this.startPeerHealthLoops();
     this.trackerSignalling.connect();
+
+    if (this.trackerConnectivityTimer) {
+      clearTimeout(this.trackerConnectivityTimer);
+    }
+    this.trackerConnectivityTimer = setTimeout(() => {
+      if (!this.trackerSignalling) return;
+      if (this.trackerSignalling.getConnectedTrackerCount() > 0) return;
+      this.onError("No tracker connection established. Switch to Tunnel mode from Home and share the fallback URL.");
+    }, 12_000);
   }
 
   private startPeerHealthLoops() {

@@ -4,10 +4,9 @@ export interface ExistingPeerInfo {
 }
 
 export const DEFAULT_WEBTORRENT_TRACKERS = [
-  "wss://tracker.webtorrent.dev",
-  "wss://tracker.btorrent.xyz",
   "wss://tracker.files.fm:7073/announce",
   "wss://tracker.openwebtorrent.com",
+  "wss://tracker.webtorrent.dev",
 ] as const;
 
 export interface JoinSignal {
