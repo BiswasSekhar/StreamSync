@@ -39,6 +39,10 @@ pub async fn create_room(
 pub async fn close_room(
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
+    // Tell every signaller WS task that the host is gone so they can
+    // send `host-ended` and close cleanly. Empty payload = all rooms.
+    let _ = state.room_close_tx.send(String::new());
+
     crate::engine::tunnel::stop_tunnel(&state).await;
     let mut torrent_stream = state.torrent_stream.lock().await;
     *torrent_stream = None;

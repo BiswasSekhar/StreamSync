@@ -80,6 +80,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             probe_file,
+            detect_hardware,
             extract_subtitle_command,
             prepare_video_for_streaming,
             start_seeding_original,

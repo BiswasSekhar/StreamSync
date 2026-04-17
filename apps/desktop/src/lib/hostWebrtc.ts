@@ -1,4 +1,5 @@
 // WebSocket signalling is handled by the local signaller on port 8787.
+import { MAX_VIEWERS_PER_ROOM } from "@streamsync/shared";
 
 export interface SyncState {
   position: number;
@@ -35,7 +36,7 @@ interface PeerChannels {
   iceBatchTimer: ReturnType<typeof setTimeout> | null;
 }
 
-const MAX_PEERS = 5;
+const MAX_PEERS = MAX_VIEWERS_PER_ROOM;
 const ICE_BATCH_DELAY = 300; // ms
 
 export class HostWebRTC {
@@ -95,7 +96,7 @@ export class HostWebRTC {
     this.pendingApproval.delete(peerId);
 
     if (this.peers.size >= MAX_PEERS) {
-      this.sendSignal({ type: 'join-denied', reason: 'Room is full (max 5 viewers)', target: peerId });
+      this.sendSignal({ type: 'join-denied', reason: `Room is full (max ${MAX_PEERS} viewers)`, target: peerId });
       return;
     }
 
@@ -221,7 +222,7 @@ export class HostWebRTC {
 
         // Auto-deny if room full
         if (this.peers.size >= MAX_PEERS) {
-          this.sendSignal({ type: 'join-denied', reason: 'Room is full (max 5 viewers)', target: senderPubkey });
+          this.sendSignal({ type: 'join-denied', reason: `Room is full (max ${MAX_PEERS} viewers)`, target: senderPubkey });
           return;
         }
 

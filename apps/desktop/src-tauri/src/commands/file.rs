@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tauri::State;
 use tauri::Manager as _;
 
-use crate::engine::ffmpeg::{probe_video, extract_subtitle, VideoProbeResult, start_remux_pipeline, start_encode_pipeline};
+use crate::engine::ffmpeg::{probe_video, extract_subtitle, detect_hw_encoders, VideoProbeResult, start_remux_pipeline, start_encode_pipeline};
 use crate::state::AppState;
 use crate::engine::signaller::CurrentFilePath;
 
@@ -12,6 +12,30 @@ pub async fn probe_file(
     _state: State<'_, Arc<AppState>>,
 ) -> Result<VideoProbeResult, String> {
     probe_video(&path).await.map_err(|e| e.to_string())
+}
+
+/// Return the list of hardware encoders available on this host, as the
+/// serialized HwEncoder variant names (e.g. "Nvenc", "VideoToolbox",
+/// "Software"). The frontend uses this to populate the encoder picker.
+#[tauri::command]
+pub async fn detect_hardware(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<String>, String> {
+    let encoders = detect_hw_encoders().await.map_err(|e| e.to_string())?;
+    {
+        let mut enc = state.encoder.lock().await;
+        enc.available_hw = encoders.clone();
+        if let Some(best) = encoders.first() {
+            enc.selected_hw = best.clone();
+        }
+    }
+    Ok(encoders
+        .into_iter()
+        .map(|e| serde_json::to_value(&e)
+            .ok()
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| format!("{:?}", e)))
+        .collect())
 }
 
 #[tauri::command]

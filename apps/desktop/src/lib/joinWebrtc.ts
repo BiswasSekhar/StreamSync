@@ -74,6 +74,7 @@ export class JoinWebRTC {
     private onCameraStream: (stream: MediaStream | null, status: CameraPermissionStatus) => void = () => {},
     private onRemoteStream: (stream: MediaStream) => void = () => {},
     private onJoinApproved: () => void = () => {},
+    private onMediaChunkError: (reqId: string, reason?: string) => void = () => {},
   ) {}
 
   /**

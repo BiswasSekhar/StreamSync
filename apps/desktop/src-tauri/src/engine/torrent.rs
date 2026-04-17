@@ -199,8 +199,12 @@ async fn monitor_torrent_stats(
     state: Arc<AppState>,
     _session: Arc<librqbit::Session>, // keep alive
 ) {
+    let mut close_rx = state.room_close_tx.subscribe();
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(2)) => {}
+            _ = close_rx.recv() => break,
+        }
 
         let stats = handle.stats();
         let mut ts = state.torrent.lock().await;
@@ -212,6 +216,7 @@ async fn monitor_torrent_stats(
             }
         }
     }
+    tracing::info!("monitor_torrent_stats: exiting after room close");
 }
 
 // ─── External torrent loading (download from swarm) ───────────────────────────
@@ -525,8 +530,12 @@ async fn monitor_download_stats(
     app: tauri::AppHandle,
     _session: Arc<librqbit::Session>,
 ) {
+    let mut close_rx = state.room_close_tx.subscribe();
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(2)) => {}
+            _ = close_rx.recv() => break,
+        }
 
         let stats = handle.stats();
         let Some(live) = stats.live else { continue };
@@ -558,6 +567,7 @@ async fn monitor_download_stats(
             }),
         );
     }
+    tracing::info!("monitor_download_stats: exiting after room close");
 }
 
 pub async fn get_magnet_link(state: &AppState) -> Option<String> {

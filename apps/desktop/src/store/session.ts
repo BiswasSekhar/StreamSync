@@ -434,46 +434,6 @@ export function initEventListeners() {
     useSessionStore.setState({ magnetLink: payload.magnet });
   });
 
-  on<{ peerId: string; displayName: string }>("peer-joined", ({ payload }) => {
-    useSessionStore.setState((state) => ({
-      peers: [
-        ...state.peers,
-        {
-          id: payload.peerId,
-          displayName: payload.displayName || "Guest",
-          videoPosition: 0,
-          connected: true,
-        },
-      ],
-    }));
-    useSessionStore.getState().showToast(`${payload.displayName || "A viewer"} joined`, "info");
-  });
-
-  on<{ peerId: string }>("peer-left", ({ payload }) => {
-    useSessionStore.setState((state) => ({
-      peers: state.peers.filter((p) => p.id !== payload.peerId),
-    }));
-  });
-
-  on<ChatMessage>("chat-message", ({ payload }) => {
-    useSessionStore.setState((state) => ({
-      messages: [...state.messages, payload],
-    }));
-  });
-
-  on<{ url: string }>("tunnel-url", ({ payload }) => {
-    useSessionStore.setState({ tunnelUrl: payload.url, tunnelConnected: true });
-  });
-
-  on<void>("tunnel-disconnected", () => {
-    useSessionStore.setState({ tunnelConnected: false });
-    useSessionStore.getState().showToast("Tunnel disconnected, reconnecting...", "warning");
-  });
-
-  on<string>("tunnel-error", ({ payload }) => {
-    useSessionStore.getState().showToast(`Tunnel error: ${payload}`, "error");
-  });
-
   on<string>("encoder-fallback", ({ payload }) => {
     useSessionStore.getState().showToast(`Hardware encoder failed, using ${payload}`, "warning");
   });

@@ -27,6 +27,10 @@ struct PeerSender {
 
 type RoomMap = Arc<Mutex<HashMap<String, Vec<PeerSender>>>>;
 
+/// Max peers per room (host + viewers). Mirrors
+/// `MAX_PEERS_PER_ROOM` in packages/shared/src/limits.ts.
+const MAX_PEERS_PER_ROOM: usize = 6;
+
 pub type CurrentFilePath = Arc<RwLock<Option<String>>>;
 
 #[derive(Clone)]
@@ -71,10 +75,16 @@ async fn ws_handler(
     State(state): State<SignallerState>,
     Query(_params): Query<HashMap<String, String>>,
 ) -> Response {
-    ws.on_upgrade(move |socket| handle_ws(socket, state.rooms))
+    let rooms = state.rooms.clone();
+    let close_rx = state.app_state.room_close_tx.subscribe();
+    ws.on_upgrade(move |socket| handle_ws(socket, rooms, close_rx))
 }
 
-async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
+async fn handle_ws(
+    socket: WebSocket,
+    rooms: RoomMap,
+    mut close_rx: tokio::sync::broadcast::Receiver<String>,
+) {
     let peer_id = uuid::Uuid::new_v4().to_string();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
     let mut current_room: Option<String> = None;
@@ -89,7 +99,28 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
         }
     });
 
-    while let Some(Ok(msg)) = ws_stream.next().await {
+    loop {
+        let msg = tokio::select! {
+            msg = ws_stream.next() => match msg {
+                Some(Ok(m)) => m,
+                _ => break,
+            },
+            notice = close_rx.recv() => match notice {
+                Ok(target_room) => {
+                    let matches = target_room.is_empty()
+                        || current_room.as_deref() == Some(target_room.as_str());
+                    if matches {
+                        let _ = tx.send(Message::Text(r#"{"type":"host-ended"}"#.to_string()));
+                        let _ = tx.send(Message::Close(None));
+                    }
+                    continue;
+                }
+                // Lagged or channel closed: stay connected, clients can
+                // still detect disconnect on their own.
+                Err(_) => continue,
+            },
+        };
+
         match msg {
             Message::Text(text) => {
                 let signal: serde_json::Value = match serde_json::from_str(&text) {
@@ -110,7 +141,7 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
                         let mut rooms_lock = rooms.lock().await;
                         let room = rooms_lock.entry(room_id.clone()).or_default();
 
-                        if room.len() >= 9 {
+                        if room.len() >= MAX_PEERS_PER_ROOM {
                             let _ = tx.send(Message::Text(r#"{"type":"room-full"}"#.to_string()));
                             continue;
                         }
@@ -235,6 +266,33 @@ async fn handle_ws(socket: WebSocket, rooms: RoomMap) {
 
 const STREAM_CHUNK_SIZE: u64 = 2 * 1024 * 1024;
 
+/// Parse an HTTP `Range: bytes=start-end` header against a known total size.
+/// Accepts both closed (`bytes=N-M`) and open-ended (`bytes=N-`) forms.
+/// Returns `(start, end_inclusive, is_range)`; defaults to the full range
+/// when the header is missing or malformed.
+fn parse_range(range_header: &str, total: u64) -> (u64, u64, bool) {
+    if total == 0 {
+        return (0, 0, false);
+    }
+    let Some(spec) = range_header.strip_prefix("bytes=") else {
+        return (0, total - 1, false);
+    };
+    let mut parts = spec.splitn(2, '-');
+    let start = parts
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    let end = parts
+        .next()
+        .and_then(|s| if s.is_empty() { None } else { s.parse::<u64>().ok() })
+        .unwrap_or_else(|| (start + STREAM_CHUNK_SIZE).saturating_sub(1))
+        .min(total - 1);
+    if start > end {
+        return (0, total - 1, false);
+    }
+    (start, end, true)
+}
+
 async fn video_stream_handler(
     State(state): State<SignallerState>,
     headers: HeaderMap,
@@ -279,18 +337,7 @@ async fn video_stream_handler(
     };
 
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    let (start, end, is_range) = if range_header.starts_with("bytes=") {
-        let range_spec = &range_header[6..];
-        let parts: Vec<&str> = range_spec.splitn(2, '-').collect();
-        let start = parts.first().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        let end = parts.get(1)
-            .and_then(|s| if s.is_empty() { None } else { s.parse::<u64>().ok() })
-            .unwrap_or_else(|| (start + STREAM_CHUNK_SIZE).min(file_size) - 1)
-            .min(file_size - 1);
-        (start, end, true)
-    } else {
-        (0, file_size.saturating_sub(1), false)
-    };
+    let (start, end, is_range) = parse_range(range_header, file_size);
 
     let chunk_size = end - start + 1;
 
@@ -335,7 +382,7 @@ async fn torrent_video_stream_response(
     source: crate::state::TorrentStreamSource,
     headers: HeaderMap,
 ) -> Response {
-    use tokio::io::AsyncSeekExt;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
     let mut stream = match source.handle.stream(source.file_id) {
         Ok(stream) => stream,
@@ -350,40 +397,31 @@ async fn torrent_video_stream_response(
         return (StatusCode::NOT_FOUND, "Empty torrent stream").into_response();
     }
 
-    let mut status = StatusCode::OK;
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, source.content_type.parse().unwrap());
     response_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
     response_headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().unwrap());
 
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    if let Some(offset) = range_header
-        .strip_prefix("bytes=")
-        .and_then(|v| v.strip_suffix('-'))
-        .and_then(|v| v.parse::<u64>().ok())
-    {
-        if offset < total_len {
-            status = StatusCode::PARTIAL_CONTENT;
-            if let Err(error) = stream.seek(std::io::SeekFrom::Start(offset)).await {
-                tracing::error!("Failed to seek torrent stream: {}", error);
-                return (StatusCode::INTERNAL_SERVER_ERROR, "Seek failed").into_response();
-            }
+    let (start, end, is_range) = parse_range(range_header, total_len);
+    let chunk_size = end - start + 1;
 
-            response_headers.insert(
-                header::CONTENT_LENGTH,
-                (total_len - stream.position()).to_string().parse().unwrap(),
-            );
-            response_headers.insert(
-                header::CONTENT_RANGE,
-                format!("bytes {}-{}/{}", stream.position(), total_len.saturating_sub(1), total_len)
-                    .parse()
-                    .unwrap(),
-            );
+    if is_range {
+        if let Err(error) = stream.seek(std::io::SeekFrom::Start(start)).await {
+            tracing::error!("Failed to seek torrent stream: {}", error);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Seek failed").into_response();
         }
+        response_headers.insert(header::CONTENT_LENGTH, chunk_size.to_string().parse().unwrap());
+        response_headers.insert(
+            header::CONTENT_RANGE,
+            format!("bytes {}-{}/{}", start, end, total_len).parse().unwrap(),
+        );
+        let limited = stream.take(chunk_size);
+        let body = Body::from_stream(tokio_util::io::ReaderStream::with_capacity(limited, 65_536));
+        (StatusCode::PARTIAL_CONTENT, response_headers, body).into_response()
     } else {
         response_headers.insert(header::CONTENT_LENGTH, total_len.to_string().parse().unwrap());
+        let body = Body::from_stream(tokio_util::io::ReaderStream::with_capacity(stream, 65_536));
+        (StatusCode::OK, response_headers, body).into_response()
     }
-
-    let body = Body::from_stream(tokio_util::io::ReaderStream::with_capacity(stream, 65_536));
-    (status, response_headers, body).into_response()
 }

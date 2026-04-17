@@ -201,12 +201,17 @@ pub struct AppState {
     pub peers: Mutex<HashMap<String, PeerState>>,
     pub torrent_stream: Mutex<Option<TorrentStreamSource>>,
     pub event_tx: broadcast::Sender<AppEvent>,
+    /// Broadcasts a `host-ended` notification. Signaller WS tasks
+    /// subscribe on connect and close cleanly when they receive a
+    /// matching room id (or an empty string for "all rooms").
+    pub room_close_tx: broadcast::Sender<String>,
     pub sync_sequence: std::sync::atomic::AtomicU64,
 }
 
 impl AppState {
     pub fn new() -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
+        let (room_close_tx, _) = broadcast::channel(16);
         Arc::new(AppState {
             session: Mutex::new(None),
             encoder: Mutex::new(EncoderState::default()),
@@ -217,6 +222,7 @@ impl AppState {
             peers: Mutex::new(HashMap::new()),
             torrent_stream: Mutex::new(None),
             event_tx,
+            room_close_tx,
             sync_sequence: std::sync::atomic::AtomicU64::new(0),
         })
     }

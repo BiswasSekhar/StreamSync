@@ -26,7 +26,7 @@ pub enum StreamSyncError {
     #[error("WebRTC peer connection failed for peer {peer_id}")]
     PeerConnectionFailed { peer_id: String },
 
-    #[error("Room is full (max 8 receivers)")]
+    #[error("Room is full")]
     RoomFull,
 
     #[error("IO error: {0}")]
