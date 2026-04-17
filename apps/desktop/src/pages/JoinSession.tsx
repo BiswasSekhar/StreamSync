@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { JoinWebRTC, CameraPermissionStatus, VideoReadyInfo, ChunkMeta } from "../lib/joinWebrtc";
-import { SyncMessage } from "../lib/sync";
+import type { SyncMessage } from "@streamsync/shared";
 import { useSessionStore } from "../store/session";
 import { VideoOverlay } from "../components/VideoOverlay";
 
@@ -60,6 +60,7 @@ export function JoinSession() {
   const suppressControlRef = useRef(0);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const roomUrl = useSessionStore(s => s.joinRoomUrl);
+  const trackerUrls = useSessionStore(s => s.trackerUrls);
   const localTorrentFilePath = useSessionStore(s => s.filePath);
 
   // MSE DataChannel streaming state
@@ -72,7 +73,8 @@ export function JoinSession() {
   const durationRef = useRef(0);
   const pendingRequests = useRef<Map<string, { start: number; end: number }>>(new Map());
   const CHUNK_SIZE = 128 * 1024; // 128 KB
-  const IN_FLIGHT = 4;
+  const IN_FLIGHT = 2;
+  const DEBUG_MEDIA = typeof window !== "undefined" && window.location.protocol.startsWith("http");
 
   const bufferingLabel = useMemo(() => {
     if (status === "playing") return "Watching";
@@ -199,11 +201,24 @@ export function JoinSession() {
     
     const oldSize = pendingRequests.current.size;
     while (pendingRequests.current.size < IN_FLIGHT && nextByte.current < fileSize) {
+      if (!rtcRef.current?.canRequestChunk()) {
+        if (DEBUG_MEDIA) {
+          console.debug("[MSE] Deferring chunk request due to media DC bufferedAmount", {
+            bufferedAmount: rtcRef.current?.getMediaBufferedAmount() ?? 0,
+          });
+        }
+        break;
+      }
+
       const start = nextByte.current;
       const end = Math.min(start + CHUNK_SIZE - 1, fileSize - 1);
       const reqId = crypto.randomUUID();
+      const sent = rtcRef.current?.requestChunk(start, end, reqId) ?? false;
+      if (!sent) {
+        break;
+      }
+
       pendingRequests.current.set(reqId, { start, end });
-      rtcRef.current?.requestChunk(start, end, reqId);
       nextByte.current = end + 1;
     }
     if (pendingRequests.current.size > oldSize) {
@@ -230,6 +245,21 @@ export function JoinSession() {
       pendingChunks.current.push(data);
     }
   }, [appendNextChunk, pumpChunks]);
+
+  const handleMediaChunkError = useCallback((reqId: string, reason?: string) => {
+    const failed = pendingRequests.current.get(reqId);
+    if (failed) {
+      pendingRequests.current.delete(reqId);
+      // Rewind to the failed byte range so a future pump can retry it.
+      nextByte.current = Math.min(nextByte.current, failed.start);
+    }
+
+    if (DEBUG_MEDIA) {
+      console.debug("[MSE] Host chunk error", { reqId, reason });
+    }
+
+    pumpChunks();
+  }, [pumpChunks]);
 
   const startMSE = useCallback((info: VideoReadyInfo) => {
     const v = videoRef.current;
@@ -414,7 +444,8 @@ export function JoinSession() {
   }, [localTorrentFilePath, showToast]);
 
   useEffect(() => {
-    if (!roomUrl) { setError("No room URL"); setStatus("error"); return; }
+    if (!roomUrl) { setError("No room link"); setStatus("error"); return; }
+
     const rtc = new JoinWebRTC(
       handleVideoReady,
       handleSync,
@@ -438,16 +469,23 @@ export function JoinSession() {
       handleRemoteStream,
       // onJoinApproved — host clicked Admit; advance UI so user knows they're in
       () => setStatus(prev => (prev === "connecting" || prev === "waiting-approval") ? "waiting-approval" : prev),
+      handleMediaChunkError,
     );
+    rtc.setOnMediaDrain(() => {
+      if (DEBUG_MEDIA) {
+        console.debug("[MSE] mediaDc bufferedAmountLow event -> pumping queued ranges");
+      }
+      pumpChunks();
+    });
     rtcRef.current = rtc;
     setStatus("connecting");
-    rtc.connect(roomUrl);
+    rtc.connect(roomUrl, { trackerUrls });
     
     return () => {
       rtc.close();
       cleanupPlaybackTransport();
     };
-  }, [cleanupPlaybackTransport, handleDisconnected, handleHostEnded, handleJoinDenied, handleVideoReady, handleSync, handleChat, handleMediaChunk, handleRemoteStream, roomUrl, showToast]);
+  }, [cleanupPlaybackTransport, handleDisconnected, handleHostEnded, handleJoinDenied, handleVideoReady, handleSync, handleChat, handleMediaChunk, handleMediaChunkError, handleRemoteStream, pumpChunks, roomUrl, trackerUrls, showToast]);
 
   const sendControl = useCallback((action: "play" | "pause" | "seek") => {
     if (Date.now() < suppressControlRef.current) return;

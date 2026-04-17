@@ -12,7 +12,7 @@ interface FloatPos { x: number; y: number; }
 interface CamTile { id: string; label: string; stream: MediaStream | null; isLocal: boolean; }
 
 export function Session() {
-  const { peers, roomUrl, closeRoom, leaveSession, sessionId, showToast, messages, displayName, roomCodeVisible } = useSessionStore();
+  const { peers, roomUrl, shareCode, trackerUrls, closeRoom, leaveSession, sessionId, showToast, messages, displayName, roomCodeVisible } = useSessionStore();
   const hostRtcRef = useRef<HostWebRTC | null>(null);
   // Pending join requests (peerId → displayName)
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
@@ -81,7 +81,7 @@ export function Session() {
   // ── Init HostWebRTC ──
   // Uses stableOnPlaybackControl (no videoEl dep) → no reconnect when videoEl changes
   useEffect(() => {
-    if (!sessionId || !roomUrl) return;
+    if (!sessionId) return;
     const rtc = new HostWebRTC(
       (peerId, name) => {
         useSessionStore.setState(s => ({ peers: [...s.peers, { id: peerId, displayName: name, videoPosition: 0, connected: true }] }));
@@ -103,7 +103,7 @@ export function Session() {
       stableOnPlaybackControl,
     );
     hostRtcRef.current = rtc;
-    rtc.connect(sessionId);
+    rtc.connect(shareCode ?? sessionId, { trackerUrls });
 
     // If encode is already complete (effect re-runs), inform the new RTC instance immediately
     const store = useSessionStore.getState();
@@ -119,7 +119,7 @@ export function Session() {
     }
 
     return () => { rtc.close(); hostRtcRef.current = null; };
-  }, [sessionId, roomUrl, handleRemoteStream, stableOnPlaybackControl, displayName, addToast, showToast]);
+  }, [sessionId, shareCode, trackerUrls, handleRemoteStream, stableOnPlaybackControl, displayName, addToast, showToast]);
 
   const encodeComplete = useSessionStore(s => s.encodeComplete);
   const probeResult = useSessionStore(s => s.probeResult);
@@ -377,7 +377,7 @@ export function Session() {
           </span>
         </div>
         <div style={{ pointerEvents: "all", display: "flex", alignItems: "center", gap: 8 }}>
-          {roomUrl && roomCodeVisible && <RoomLink compact />}
+          {(roomUrl || shareCode) && roomCodeVisible && <RoomLink compact />}
           <button onClick={leaveSession} style={btnGhost}>← Back</button>
           <button onClick={closeRoom} style={btnDanger}>End</button>
         </div>

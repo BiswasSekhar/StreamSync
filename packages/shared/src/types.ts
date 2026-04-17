@@ -1,46 +1,4 @@
-// ===== Signalling (over WebSocket via cloudflare) =====
-
-export type SignalMessage =
-  | { type: "join"; room: string; displayName?: string }
-  | { type: "offer"; sdp: string; peerId: string }
-  | { type: "answer"; sdp: string; peerId: string }
-  | { type: "ice-candidate"; candidate: RTCIceCandidateInit; peerId: string }
-  | { type: "peer-joined"; peerId: string; displayName: string }
-  | { type: "peer-left"; peerId: string }
-  | { type: "room-full" }
-  | { type: "ping"; timestamp: number }
-  | { type: "pong"; timestamp: number; serverTime: number }
-  | { type: "error"; message: string };
-
-// ===== Data Channel Messages (P2P, post-handshake) =====
-
-export type ControlMessage =
-  | { type: "magnet"; magnet: string; fileName: string; duration: number }
-  | {
-      type: "video-ready";
-      fileName: string;
-      mimeCodec: string;
-      fileSize: number;
-      durationSeconds: number;
-    }
-  | { type: "ping"; timestamp: number }
-  | { type: "pong"; timestamp: number; serverTime: number };
-
-export interface SyncMessage {
-  type: "sync";
-  position: number;
-  playing: boolean;
-  timestamp: number;
-  sequence: number;
-}
-
-export interface ChatMessage {
-  type: "chat";
-  id: string;
-  from: string;
-  text: string;
-  timestamp: number;
-}
+// Legacy domain models still shared across clients.
 
 // ===== Probe Result =====
 

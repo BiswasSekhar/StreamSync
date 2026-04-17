@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import type { CreateRoomResponse, SignallingMode } from "@streamsync/shared";
 
 function isTauriRuntime(): boolean {
   if (typeof window === "undefined") return false;
@@ -144,6 +145,9 @@ interface SessionStore {
 
   // Session
   sessionId: string | null;
+  signallingMode: SignallingMode;
+  shareCode: string | null;
+  trackerUrls: string[];
   roomUrl: string | null;
   magnetLink: string | null;
 
@@ -172,7 +176,8 @@ interface SessionStore {
   // Actions
   setFile: (path: string) => Promise<void>;
   loadTorrent: (path: string) => Promise<void>;
-  createRoom: () => Promise<string>;
+  createRoom: (mode?: SignallingMode) => Promise<CreateRoomResponse>;
+  setSignallingMode: (mode: SignallingMode) => void;
   joinRoom: (url: string) => void;
   enterSession: () => void;
   leaveSession: () => void;
@@ -206,6 +211,9 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   encodeProgress: null,
   encodeComplete: false,
   sessionId: null,
+  signallingMode: "tunnel",
+  shareCode: null,
+  trackerUrls: [],
   roomUrl: null,
   magnetLink: null,
   peers: [],
@@ -267,7 +275,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     }
   },
 
-  createRoom: async () => {
+  createRoom: async (mode?: SignallingMode) => {
     const { filePath, isTorrentSource } = get();
     if (!filePath) throw new Error("No file selected");
 
@@ -278,19 +286,42 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       }
       // For torrent source, load_torrent_file already kicked off the download
 
-      // Backend returns full tunnel URL, e.g. https://...trycloudflare.com/?room=ABCDEFGH
-      const roomUrl = await invoke<string>("create_room");
-      const parsed = new URL(roomUrl);
-      const sessionId = (parsed.searchParams.get("room") ?? "").trim().toUpperCase();
+      const selectedMode = mode ?? get().signallingMode;
+      const response = await invoke<CreateRoomResponse>("create_room", { mode: selectedMode });
 
-      set({ roomUrl, sessionId, tunnelConnected: true, tunnelUrl: parsed.origin });
-      get().showToast("Room created! Open the session to share the URL.", "success");
-      return roomUrl;
+      let tunnelUrl: string | null = null;
+      if (response.fallbackUrl) {
+        try {
+          tunnelUrl = new URL(response.fallbackUrl).origin;
+        } catch {
+          tunnelUrl = null;
+        }
+      }
+
+      set({
+        sessionId: response.sessionId,
+        signallingMode: response.mode,
+        shareCode: response.shareCode,
+        trackerUrls: response.trackerUrls ?? [],
+        roomUrl: response.fallbackUrl,
+        tunnelConnected: Boolean(response.fallbackUrl),
+        tunnelUrl,
+      });
+
+      if (response.mode === "tracker") {
+        get().showToast("Tracker room created. Share the code with viewers.", "success");
+      } else {
+        get().showToast("Room created! Open the session to share the URL.", "success");
+      }
+
+      return response;
     } catch (e) {
       get().showToast(`Failed to create room: ${e}`, "error");
       throw e;
     }
   },
+
+  setSignallingMode: (mode) => set({ signallingMode: mode }),
 
   joinRoom: (url: string) => {
     set({ joinRoomUrl: url, view: "join" });
@@ -303,12 +334,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   leaveSession: () => {
     clearTorrentProbeRetry();
-    const { roomUrl } = get();
+    const { sessionId } = get();
 
     // If the host leaves, close the room so peers do not hang waiting for a host
     // that is no longer present.
     // Fire-and-forget — we don't await so navigation is instant.
-    if (roomUrl) {
+    if (sessionId) {
       invoke("close_room").catch(() => {});
     }
 
@@ -319,6 +350,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       // Reset all room/session state so the next "Create Watch Party" works
       roomUrl: null,
       sessionId: null,
+      shareCode: null,
+      trackerUrls: [],
       peers: [],
       messages: [],
       tunnelConnected: false,
@@ -370,6 +403,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     set({
       view: "home",
       sessionId: null,
+      shareCode: null,
+      trackerUrls: [],
       roomUrl: null,
       magnetLink: null,
       peers: [],

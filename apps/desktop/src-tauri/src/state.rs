@@ -128,7 +128,10 @@ pub enum AppEvent {
 
 pub struct SessionState {
     pub id: String,
+    pub mode: String,
+    pub share_code: String,
     pub room_url: String,
+    pub fallback_url: Option<String>,
     pub created_at: std::time::Instant,
     pub magnet_link: Option<String>,
 }

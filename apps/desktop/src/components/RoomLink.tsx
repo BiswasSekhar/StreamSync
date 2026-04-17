@@ -6,13 +6,16 @@ interface Props {
 }
 
 export function RoomLink({ compact = false }: Props) {
-  const { roomUrl, magnetLink, encodeProgress } = useSessionStore();
+  const { roomUrl, shareCode, signallingMode, magnetLink, encodeProgress } = useSessionStore();
   const [copied, setCopied] = useState(false);
 
-  if (!roomUrl) return null;
+  const isTracker = signallingMode === "tracker";
+  const shareValue = isTracker ? shareCode : roomUrl;
+
+  if (!shareValue) return null;
 
   const copyCode = async () => {
-    await navigator.clipboard.writeText(roomUrl);
+    await navigator.clipboard.writeText(shareValue);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -23,7 +26,7 @@ export function RoomLink({ compact = false }: Props) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button onClick={copyCode} className="btn-ghost" style={{ fontSize: 11 }}>
-          {copied ? "✓ Copied!" : "Copy Room URL"}
+          {copied ? "✓ Copied!" : isTracker ? "Copy Share Code" : "Copy Room URL"}
         </button>
       </div>
     );
@@ -50,11 +53,11 @@ export function RoomLink({ compact = false }: Props) {
       {/* Code Display */}
       <div>
         <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 8, textTransform: "uppercase", letterSpacing: 1 }}>
-          Share this Room URL
+          {isTracker ? "Share this Room Code" : "Share this Room URL"}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, background: "rgba(0,0,0,0.4)", padding: "12px 16px", borderRadius: 16, border: "1px solid rgba(255,255,255,0.05)", maxWidth: 620 }}>
           <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 600, color: "#f1f5f9", wordBreak: "break-all" }}>
-            {roomUrl}
+            {shareValue}
           </span>
           <div style={{ width: 1, height: 40, background: "rgba(255,255,255,0.1)", margin: "0 2px" }} />
           <button onClick={copyCode} className="btn-ghost" style={{ width: 44, height: 44, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -72,7 +75,9 @@ export function RoomLink({ compact = false }: Props) {
       </div>
       
       <span style={{ fontSize: 11, color: "var(--text-muted)", maxWidth: 300 }}>
-        Friends can join by opening the URL in a browser or pasting it in StreamSync desktop.
+        {isTracker
+          ? "Friends can join by entering this share code in StreamSync desktop."
+          : "Friends can join by opening the URL in a browser or pasting it in StreamSync desktop."}
       </span>
     </div>
   );

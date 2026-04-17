@@ -1,4 +1,4 @@
-import { SyncMessage } from "./types";
+import type { SyncMessage } from "./control";
 
 export class SyncController {
   private clockOffset = 0; // ms

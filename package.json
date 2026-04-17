@@ -7,9 +7,10 @@
     "build": "turbo run build",
     "dev:desktop": "cd apps/desktop && pnpm tauri dev",
     "build:desktop": "cd apps/desktop && pnpm tauri build",
+    "build:desktop:with-tunnel": "pnpm prepare-resources:with-tunnel && cd apps/desktop && pnpm tauri build",
     "dev:web-receiver": "cd apps/receiver-web && pnpm dev",
     "build:web-receiver": "cd apps/receiver-web && pnpm build",
-    "prepare-resources": "node scripts/download-cloudflared.js"
+    "prepare-resources:with-tunnel": "node scripts/download-cloudflared.js"
   },
   "devDependencies": {
     "turbo": "^1.13.0"

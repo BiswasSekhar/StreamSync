@@ -1,24 +1,24 @@
 // WebSocket signalling is handled by the local signaller on port 8787.
-import { MAX_VIEWERS_PER_ROOM } from "@streamsync/shared";
+import {
+  MAX_VIEWERS_PER_ROOM,
+  encodeChunkEnvelope,
+  type ChatMessage,
+  type JoinRequestSignal,
+  type SignallingMessage,
+  type SyncChannelMessage,
+  type SyncHeartbeatMessage,
+  type SyncMessage,
+  type VideoReadyControlMessage,
+  type WebRtcChunkRequestMessage,
+  type WebRtcChunkResponseMetaMessage,
+} from "@streamsync/shared";
+import { TrackerSignallingMesh, normalizeTrackerInfoHash } from "./trackerSignalling";
 
-export interface SyncState {
-  position: number;
-  playing: boolean;
-  timestamp: number;
-  sequence: number;
-}
+export type SyncState = SyncMessage;
 
-export interface ChatMsg {
-  id: string;
-  from: string;
-  text: string;
-  timestamp: number;
-}
+export type ChatMsg = ChatMessage;
 
-export interface JoinRequest {
-  peerId: string;
-  displayName: string;
-}
+export type JoinRequest = Pick<JoinRequestSignal, "displayName"> & { peerId: string };
 
 interface PeerChannels {
   pc: RTCPeerConnection;
@@ -38,6 +38,8 @@ interface PeerChannels {
 
 const MAX_PEERS = MAX_VIEWERS_PER_ROOM;
 const ICE_BATCH_DELAY = 300; // ms
+const HEARTBEAT_INTERVAL_MS = 20_000;
+const PEER_STALE_TIMEOUT_MS = 60_000;
 
 export class HostWebRTC {
   private peers = new Map<string, PeerChannels>();
@@ -48,8 +50,12 @@ export class HostWebRTC {
   private syncSeq = 0;
 
   private ws: WebSocket | null = null;
+  private trackerSignalling: TrackerSignallingMesh | null = null;
   private myPeerId: string | null = null;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private staleSweepInterval: ReturnType<typeof setInterval> | null = null;
+  private peerLastSeenAt = new Map<string, number>();
   private roomId: string | null = null;
 
   constructor(
@@ -62,23 +68,30 @@ export class HostWebRTC {
     private onPlaybackControl: (action: 'play' | 'pause' | 'seek', position: number, fromPeerId: string) => void = () => {},
   ) {}
 
-  connect(roomId: string) {
+  connect(roomId: string, options?: { trackerUrls?: string[] }) {
+    const trackerInfoHash = normalizeTrackerInfoHash(roomId);
+    if (trackerInfoHash) {
+      this.connectViaTracker(trackerInfoHash, options?.trackerUrls);
+      return;
+    }
+
     this.roomId = roomId.trim().toUpperCase();
     this.ws = new WebSocket("ws://localhost:8787/ws");
 
     this.ws.onopen = () => {
       this.startPingLoop();
+      this.startPeerHealthLoops();
       this.ws?.send(JSON.stringify({ type: "join", room: this.roomId, displayName: "Host" }));
     };
 
     this.ws.onmessage = async (e) => {
       try {
-        const msg = JSON.parse(e.data);
+        const msg = JSON.parse(e.data) as SignallingMessage & { peerId?: string; type: string };
         if (msg.type === "room-joined") {
           this.myPeerId = msg.peerId;
           return;
         }
-        await this.handleSignal(msg, msg.peerId);
+        await this.handleSignal(msg, msg.peerId ?? "");
       } catch (err) {
         console.error("[HostWebRTC] Failed to parse signal", err);
       }
@@ -101,6 +114,7 @@ export class HostWebRTC {
     }
 
     this.sendSignal({ type: 'join-approved', target: peerId });
+    this.markPeerAlive(peerId);
     this.onPeerJoined(peerId, info.displayName);
     this.createOfferForPeer(peerId, info.displayName);
   }
@@ -159,12 +173,17 @@ export class HostWebRTC {
       this.flushIceBatch(peerId, peer);
     }
     if (this.pingInterval) clearInterval(this.pingInterval);
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    if (this.staleSweepInterval) clearInterval(this.staleSweepInterval);
+    this.trackerSignalling?.close();
+    this.trackerSignalling = null;
     this.ws?.close();
     this.ws = null;
     for (const [, peer] of this.peers) {
       peer.pc.close();
     }
     this.peers.clear();
+    this.peerLastSeenAt.clear();
     this.peerStreams.clear();
     this.localStream?.getTracks().forEach(t => t.stop());
   }
@@ -180,9 +199,63 @@ export class HostWebRTC {
     }, 5000);
   }
 
-  private sendSignal(msg: Record<string, any>) {
+  private connectViaTracker(infoHash: string, trackerUrls?: string[]) {
+    this.roomId = infoHash.toUpperCase();
+    this.trackerSignalling = new TrackerSignallingMesh({
+      infoHash,
+      trackerUrls,
+      onSignal: (signal, senderPeerId) => this.handleSignal(signal, senderPeerId),
+      onOpen: () => {
+        this.startPeerHealthLoops();
+      },
+      onWarning: (warning) => {
+        console.warn(`[HostWebRTC] ${warning}`);
+      },
+    });
+    this.myPeerId = this.trackerSignalling.getPeerId();
+    this.startPeerHealthLoops();
+    this.trackerSignalling.connect();
+  }
+
+  private startPeerHealthLoops() {
+    if (!this.heartbeatInterval) {
+      this.heartbeatInterval = setInterval(() => {
+        const heartbeat: SyncHeartbeatMessage = { type: 'heartbeat', timestamp: Date.now() };
+        const encoded = JSON.stringify(heartbeat);
+        for (const [, peer] of this.peers) {
+          if (peer.syncDc?.readyState === 'open') {
+            peer.syncDc.send(encoded);
+          }
+        }
+      }, HEARTBEAT_INTERVAL_MS);
+    }
+
+    if (!this.staleSweepInterval) {
+      this.staleSweepInterval = setInterval(() => {
+        const now = Date.now();
+        for (const [peerId] of this.peers) {
+          const seen = this.peerLastSeenAt.get(peerId) ?? 0;
+          if (now - seen > PEER_STALE_TIMEOUT_MS) {
+            this.cleanupPeer(peerId);
+            this.onPeerLeft(peerId);
+          }
+        }
+      }, HEARTBEAT_INTERVAL_MS);
+    }
+  }
+
+  private markPeerAlive(peerId: string) {
+    this.peerLastSeenAt.set(peerId, Date.now());
+  }
+
+  private sendSignal(msg: SignallingMessage & { target?: string }) {
+    if (this.trackerSignalling) {
+      this.trackerSignalling.send(msg);
+      return;
+    }
+
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    const payload: Record<string, any> = { ...msg };
+    const payload: Record<string, unknown> = { ...msg };
     if (payload.target) {
       payload.peerId = payload.target;
       delete payload.target;
@@ -208,8 +281,12 @@ export class HostWebRTC {
     this.sendSignal({ type: 'ice-candidates', candidates, target: peerId });
   }
 
-  private async handleSignal(msg: any, senderPubkey: string) {
+  private async handleSignal(msg: SignallingMessage, senderPubkey: string) {
     if (!senderPubkey) return;
+
+    if (this.peers.has(senderPubkey)) {
+      this.markPeerAlive(senderPubkey);
+    }
 
     switch (msg.type) {
       case 'join-request': {
@@ -290,7 +367,8 @@ export class HostWebRTC {
 
     syncDc.onmessage = (e) => {
       try {
-        const msg = JSON.parse(e.data);
+        const msg = JSON.parse(e.data) as SyncChannelMessage;
+        this.markPeerAlive(peerId);
         if (msg.type === 'control') {
           this.onPlaybackControl(msg.action, msg.position ?? 0, peerId);
         }
@@ -306,41 +384,63 @@ export class HostWebRTC {
       iceBatchTimer: null,
     };
     this.peers.set(peerId, peerChannels);
+    this.markPeerAlive(peerId);
 
     controlDc.onopen = () => this.sendVideoReadyToPeer(peerChannels);
     chatDc.onmessage = (e) => {
       try {
+        this.markPeerAlive(peerId);
         this.onChat(JSON.parse(e.data));
       } catch {}
     };
 
     mediaDc.onmessage = async (e) => {
       try {
-        const req = JSON.parse(e.data as string);
+        const req = JSON.parse(e.data as string) as WebRtcChunkRequestMessage;
         if (req.type !== 'WEBRTC_CHUNK_REQUEST') return;
+        if (typeof req.reqId !== 'string') return;
+        this.markPeerAlive(peerId);
 
         // Back-pressure check: don't queue too much data
         if (mediaDc.bufferedAmount > 16 * 1024 * 1024) {
-          mediaDc.send(JSON.stringify({ type: 'WEBRTC_CHUNK_ERROR', reqId: req.reqId, reason: 'backpressure' }));
+          mediaDc.send(JSON.stringify({
+            type: 'WEBRTC_CHUNK_ERROR',
+            reqId: req.reqId,
+            chunkId: req.chunkId,
+            reason: 'backpressure',
+          }));
           return;
         }
 
         const headers: HeadersInit = req.range ? { 'Range': req.range } : {};
         const response = await fetch('http://localhost:8787/host-video', { headers });
         if (!response.ok && response.status !== 206) {
-          mediaDc.send(JSON.stringify({ type: 'WEBRTC_CHUNK_ERROR', reqId: req.reqId }));
+          mediaDc.send(JSON.stringify({
+            type: 'WEBRTC_CHUNK_ERROR',
+            reqId: req.reqId,
+            chunkId: req.chunkId,
+          }));
           return;
         }
 
         const arrayBuffer = await response.arrayBuffer();
-        // Send metadata first, then binary — receiver correlates by order
-        mediaDc.send(JSON.stringify({
+        const hasChunkId = Number.isInteger(req.chunkId) && req.chunkId >= 0;
+        const meta: WebRtcChunkResponseMetaMessage = {
           type: 'WEBRTC_CHUNK_RESPONSE',
           reqId: req.reqId,
+          chunkId: hasChunkId ? req.chunkId : 0,
           size: arrayBuffer.byteLength,
           contentRange: response.headers.get('Content-Range') ?? '',
-        }));
-        mediaDc.send(arrayBuffer);
+        };
+
+        // Send metadata first, then the binary payload.
+        mediaDc.send(JSON.stringify(meta));
+
+        const useEnvelope = req.encoding === 'chunk-id-prefix-v1' && hasChunkId;
+        const binaryPayload = useEnvelope
+          ? encodeChunkEnvelope(req.chunkId, arrayBuffer)
+          : arrayBuffer;
+        mediaDc.send(binaryPayload);
       } catch (err) {
         console.error('[HostWebRTC] Failed to handle mediaDc message', err);
       }
@@ -393,7 +493,9 @@ export class HostWebRTC {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    this.sendSignal({ type: 'offer', sdp: offer.sdp, target: peerId });
+    if (offer.sdp) {
+      this.sendSignal({ type: 'offer', sdp: offer.sdp, target: peerId });
+    }
 
     let renegotiating = false;
     pc.onnegotiationneeded = async () => {
@@ -402,7 +504,9 @@ export class HostWebRTC {
       try {
         const reOffer = await pc.createOffer();
         await pc.setLocalDescription(reOffer);
-        this.sendSignal({ type: 'offer', sdp: reOffer.sdp, target: peerId });
+        if (reOffer.sdp) {
+          this.sendSignal({ type: 'offer', sdp: reOffer.sdp, target: peerId });
+        }
       } catch (err) {
         console.error('[HostWebRTC] Renegotiation failed:', err);
       } finally {
@@ -481,7 +585,9 @@ export class HostWebRTC {
       await peer.pc.setRemoteDescription({ type: 'offer', sdp });
       const answer = await peer.pc.createAnswer();
       await peer.pc.setLocalDescription(answer);
-      this.sendSignal({ type: 'answer', sdp: answer.sdp, target: peerId });
+      if (answer.sdp) {
+        this.sendSignal({ type: 'answer', sdp: answer.sdp, target: peerId });
+      }
     } catch (err) {
       console.error(`[HostWebRTC] Failed to handle offer from ${peerId}:`, err);
     }
@@ -490,15 +596,16 @@ export class HostWebRTC {
   private sendVideoReadyToPeer(peer: PeerChannels) {
     if (!this.videoInfo) return;
     if (peer.controlDc?.readyState === 'open') {
+      const ready: VideoReadyControlMessage = {
+        type: 'video-ready',
+        fileName: this.videoInfo.fileName,
+        mimeCodec: this.videoInfo.mimeCodec,
+        fileSize: this.videoInfo.fileSize,
+        durationSeconds: this.videoInfo.durationSeconds,
+        magnetLink: this.videoInfo.magnetLink ?? null,
+      };
       peer.controlDc.send(
-        JSON.stringify({
-          type: 'video-ready',
-          fileName: this.videoInfo.fileName,
-          mimeCodec: this.videoInfo.mimeCodec,
-          fileSize: this.videoInfo.fileSize,
-          durationSeconds: this.videoInfo.durationSeconds,
-          magnetLink: this.videoInfo.magnetLink ?? null,
-        }),
+        JSON.stringify(ready),
       );
     }
   }
@@ -510,6 +617,7 @@ export class HostWebRTC {
       peer.pc.close();
       this.peers.delete(peerId);
     }
+    this.peerLastSeenAt.delete(peerId);
     this.peerStreams.delete(peerId);
   }
 }

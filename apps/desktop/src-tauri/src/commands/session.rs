@@ -2,37 +2,86 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::state::{AppState, SessionState};
+use crate::engine::tracker_signal::{self, SignallingMode};
 
 const SIGNALLING_PORT: u16 = 8787;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateRoomResponse {
+    pub session_id: String,
+    pub share_code: String,
+    pub fallback_url: Option<String>,
+    pub mode: String,
+    pub tracker_urls: Vec<String>,
+}
 
 #[tauri::command]
 pub async fn create_room(
     state: State<'_, Arc<AppState>>,
     _app_handle: tauri::AppHandle,
-) -> Result<String, String> {
-    let session_id = uuid::Uuid::new_v4().to_string().split('-').next().unwrap().to_uppercase();
+    mode: Option<String>,
+) -> Result<CreateRoomResponse, String> {
+    let selected_mode = mode
+        .as_deref()
+        .and_then(SignallingMode::parse)
+        .unwrap_or(SignallingMode::Tunnel);
 
     crate::engine::tunnel::stop_tunnel(&state).await;
     crate::engine::tunnel::kill_existing_cloudflared();
 
-    let tunnel = crate::engine::tunnel::start_tunnel(SIGNALLING_PORT)
-        .await
-        .map_err(|e| e.to_string())?;
-    let url_or_code = format!("{}/?room={}", tunnel.public_url, session_id);
-    crate::engine::tunnel::set_running_tunnel(&state, tunnel).await;
+    let (session_id, share_code, room_url, fallback_url, tracker_urls) = match selected_mode {
+        SignallingMode::Tracker => {
+            let info_hash = tracker_signal::generate_info_hash_hex();
+            let session_id = tracker_signal::make_session_id_from_info_hash(&info_hash);
+            let share_code = tracker_signal::format_share_code(&info_hash);
+            let room_url = format!("tracker://{}", info_hash);
+            let trackers = tracker_signal::DEFAULT_TRACKERS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            (session_id, share_code, room_url, None, trackers)
+        }
+        SignallingMode::Tunnel => {
+            let session_id = uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap()
+                .to_uppercase();
+
+            let tunnel = crate::engine::tunnel::start_tunnel(SIGNALLING_PORT)
+                .await
+                .map_err(|e| e.to_string())?;
+            let public_url = tunnel.public_url.clone();
+            let room_url = format!("{}/?room={}", public_url, session_id);
+            crate::engine::tunnel::set_running_tunnel(&state, tunnel).await;
+
+            (session_id.clone(), session_id, room_url.clone(), Some(room_url), vec![])
+        }
+    };
 
     // Store session state
     {
         let mut sess = state.session.lock().await;
         *sess = Some(SessionState {
             id: session_id.clone(),
-            room_url: url_or_code.clone(),
+            mode: selected_mode.as_str().to_string(),
+            share_code: share_code.clone(),
+            room_url: room_url.clone(),
+            fallback_url: fallback_url.clone(),
             created_at: std::time::Instant::now(),
             magnet_link: None,
         });
     }
 
-    Ok(url_or_code)
+    Ok(CreateRoomResponse {
+        session_id,
+        share_code,
+        fallback_url,
+        mode: selected_mode.as_str().to_string(),
+        tracker_urls,
+    })
 }
 
 #[tauri::command]
@@ -65,7 +114,10 @@ pub async fn get_session_status(
     Ok(serde_json::json!({
         "session": sess.as_ref().map(|s| serde_json::json!({
             "id": s.id,
+            "mode": s.mode,
+            "shareCode": s.share_code,
             "roomUrl": s.room_url,
+            "fallbackUrl": s.fallback_url,
             "magnetLink": s.magnet_link,
         })),
         "encodeProgress": enc.progress,

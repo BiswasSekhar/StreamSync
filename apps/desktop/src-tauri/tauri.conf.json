@@ -34,8 +34,8 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "resources/ffmpeg.exe",
-      "resources/ffprobe.exe"
+      "resources/ffmpeg*",
+      "resources/ffprobe*"
     ],
     "icon": [
       "icons/32x32.png",

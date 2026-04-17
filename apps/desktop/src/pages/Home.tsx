@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
 import type { TorrentProgressInfo } from "../store/session";
+import type { SignallingMode } from "@streamsync/shared";
 import { Settings } from "./Settings";
 
 type HomeMode = "landing" | "host" | "join";
@@ -12,6 +13,8 @@ export function Home() {
     setFile, probeResult, filePath,
     isTorrentSource, torrentFileName, torrentProgress,
     createRoom, roomUrl, sessionId, joinRoom,
+    signallingMode, setSignallingMode,
+    shareCode,
     showToast, enterSession,
     showSettings, toggleSettings,
     displayName, setDisplayName,
@@ -106,7 +109,7 @@ export function Home() {
     }
     setCreatingRoom(true);
     try {
-      await createRoom();
+      await createRoom(signallingMode);
     } catch {
       // Error shown in toast
     } finally {
@@ -115,19 +118,57 @@ export function Home() {
   };
 
   const handleJoin = () => {
-    const url = joinUrl.trim();
-    if (!url) {
-      showToast("Please paste the room URL", "warning");
+    const raw = joinUrl.trim();
+    if (!raw) {
+      showToast("Please paste a room URL or share code", "warning");
       return;
     }
-    if (!/^https?:\/\//i.test(url)) {
-      showToast("Room URL should start with http:// or https://", "warning");
-      return;
+
+    if (/^https?:\/\//i.test(raw)) {
+      joinRoom(raw);
+    } else {
+      const normalized = raw
+        .replace(/^tracker:\/\//i, "")
+        .replace(/[^a-fA-F0-9]/g, "")
+        .toLowerCase();
+
+      if (normalized.length !== 40) {
+        showToast("Enter a valid room URL or 40-character share code", "warning");
+        return;
+      }
+      joinRoom(`tracker://${normalized}`);
     }
+
     // Persist display name for receiver
     const name = joinDisplayName.trim() || `Viewer${Math.floor(Math.random() * 9000) + 1000}`;
     sessionStorage.setItem("streamsync_name", name);
-    joinRoom(url);
+  };
+
+  const signalModeButton = (mode: SignallingMode, title: string, subtitle: string) => {
+    const active = signallingMode === mode;
+    return (
+      <button
+        type="button"
+        onClick={() => setSignallingMode(mode)}
+        style={{
+          flex: 1,
+          borderRadius: 10,
+          border: active ? "1px solid rgba(129,140,248,0.7)" : "1px solid rgba(255,255,255,0.12)",
+          background: active ? "rgba(129,140,248,0.16)" : "rgba(0,0,0,0.32)",
+          color: active ? "#c7d2fe" : "#cbd5e1",
+          textAlign: "left",
+          padding: "10px 12px",
+          cursor: "pointer",
+          display: "flex",
+          flexDirection: "column",
+          gap: 2,
+          minWidth: 0,
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{title}</span>
+        <span style={{ fontSize: 11, color: active ? "#a5b4fc" : "#94a3b8" }}>{subtitle}</span>
+      </button>
+    );
   };
 
   if (showSettings) {
@@ -165,6 +206,7 @@ export function Home() {
                   isTorrentSource: false, torrentFileName: null, torrentProgress: null,
                   encodeProgress: null, encodeComplete: false,
                   roomUrl: null, sessionId: null,
+                  shareCode: null,
                 });
               }}
               className="btn-ghost"
@@ -240,7 +282,7 @@ export function Home() {
               <div className="landing-heading">
                 <h1 className="landing-title" style={{ fontSize: 22 }}>Join a Watch Party</h1>
                 <p className="landing-subtitle">
-                  Paste the room URL shared by the host.
+                  Paste the host room URL or tracker share code.
                 </p>
               </div>
 
@@ -256,7 +298,7 @@ export function Home() {
                 />
                 <input
                   type="text"
-                  placeholder="https://...trycloudflare.com/?room=ABCDEFGH"
+                  placeholder="https://...trycloudflare.com/?room=ABCDEFGH or a1b2-c3d4-..."
                   value={joinUrl}
                   onChange={e => setJoinUrl(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && handleJoin()}
@@ -302,9 +344,9 @@ export function Home() {
               <div className="step-indicator">
                 <StepDot active done={!!probeResult} num={1} label="Select Video" />
                 <div className={`step-line ${probeResult ? "done" : ""}`} />
-                <StepDot active={!!probeResult} done={!!roomUrl} num={2} label="Create Room" />
-                <div className={`step-line ${roomUrl ? "done" : ""}`} />
-                <StepDot active={!!roomUrl} done={false} num={3} label="Watch Together" />
+                <StepDot active={!!probeResult} done={!!sessionId} num={2} label="Create Room" />
+                <div className={`step-line ${sessionId ? "done" : ""}`} />
+                <StepDot active={!!sessionId} done={false} num={3} label="Watch Together" />
               </div>
 
               {/* Drop zone or file info */}
@@ -341,6 +383,7 @@ export function Home() {
                     isTorrentSource: false, torrentFileName: null, torrentProgress: null,
                     encodeProgress: null, encodeComplete: false,
                     roomUrl: null, sessionId: null,
+                    shareCode: null,
                   })}
                 />
               ) : probeResult ? (
@@ -367,6 +410,7 @@ export function Home() {
                         filePath: null, probeResult: null,
                         encodeProgress: null, encodeComplete: false,
                         roomUrl: null, sessionId: null,
+                          shareCode: null,
                       })}
                       className="btn-ghost"
                     >
@@ -377,14 +421,14 @@ export function Home() {
               ) : null}
 
               {/* Room code is shown only inside the Session view after host enters it */}
-              {roomUrl && (
+              {sessionId && (
                 <div style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: 10, padding: "10px 16px", fontSize: 13, color: "#4ade80", textAlign: "center" }}>
-                  Room ready — click "Open Watch Party" to get the share code
+                  Room ready — click "Open Watch Party" to share {signallingMode === "tracker" ? "the code" : "the URL"}
                 </div>
               )}
 
               {/* Host display name — set before creating room */}
-              {(probeResult || isTorrentSource) && !roomUrl && (
+              {(probeResult || isTorrentSource) && !sessionId && (
                 <input
                   type="text"
                   placeholder="Your display name (Host)"
@@ -395,9 +439,24 @@ export function Home() {
                 />
               )}
 
+              {(probeResult || isTorrentSource) && !sessionId && (
+                <div style={{ display: "flex", gap: 10, width: "100%" }}>
+                  {signalModeButton(
+                    "tracker",
+                    "Tracker (Primary)",
+                    "No tunnel on happy path; share code join",
+                  )}
+                  {signalModeButton(
+                    "tunnel",
+                    "Tunnel (Fallback)",
+                    "Cloudflared URL for restricted networks",
+                  )}
+                </div>
+              )}
+
               {/* Action buttons */}
               <div className="home-actions">
-                {(probeResult || isTorrentSource) && !roomUrl && (
+                {(probeResult || isTorrentSource) && !sessionId && (
                   <button
                     onClick={handleCreateRoom}
                     disabled={creatingRoom}
@@ -409,7 +468,7 @@ export function Home() {
                           <circle className="spin-track" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                           <path className="spin-fill" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                         </svg>
-                        Starting tunnel...
+                        {signallingMode === "tracker" ? "Preparing tracker room..." : "Starting tunnel..."}
                       </span>
                     ) : (
                       <span className="btn-content">
@@ -433,7 +492,7 @@ export function Home() {
                   </div>
                 )}
 
-                {roomUrl && sessionId && (
+                {sessionId && (
                   <button
                     onClick={enterSession}
                     className="btn-primary-large enter-session"
@@ -458,12 +517,20 @@ export function Home() {
                   </p>
                 )}
 
-                {(probeResult || isTorrentSource) && !roomUrl && (
+                {(probeResult || isTorrentSource) && !sessionId && (
                   <p className="home-hint-small">
-                    {isTorrentSource
-                      ? "Torrent streams from the global swarm. Viewers join with the room code."
-                      : "Creates a private room code. Viewers enter that code to join."}
+                      {signallingMode === "tracker"
+                        ? "Tracker mode issues a share code first. Tunnel remains available as a fallback mode."
+                        : isTorrentSource
+                          ? "Torrent streams from the global swarm. Viewers join with the generated URL."
+                          : "Creates a room URL through the tunnel fallback mode."}
                   </p>
+                )}
+
+                {shareCode && sessionId && signallingMode === "tracker" && (
+                  <div style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.35)", borderRadius: 10, padding: "10px 16px", fontSize: 13, color: "#c7d2fe", textAlign: "center" }}>
+                    Share code ready: <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{shareCode}</span>
+                  </div>
                 )}
               </div>
             </>

@@ -1,10 +1,4 @@
-export interface SyncMessage {
-  type: "sync";
-  position: number;
-  playing: boolean;
-  timestamp: number;
-  sequence: number;
-}
+import type { SyncMessage } from "@streamsync/shared";
 
 export class SyncController {
   private clockOffset = 0;
