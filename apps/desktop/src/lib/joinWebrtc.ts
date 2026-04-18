@@ -65,7 +65,7 @@ export class JoinWebRTC {
   private joinApproved = false;
   private joinRetryCount = 0;
   private syncHeartbeatInterval: ReturnType<typeof setInterval> | null = null;
-  private readonly MIN_RETRY_DELAY = 8_000; // 8s
+  private readonly MIN_RETRY_DELAY = 2_000; // 2s
   private readonly MAX_RETRY_DELAY = 30_000; // 30s
   // Set by close() so a pending async connect() does not send a stale join-request
   // after React StrictMode cleanup has already destroyed this instance.

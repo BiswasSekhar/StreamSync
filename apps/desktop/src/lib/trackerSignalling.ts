@@ -166,7 +166,7 @@ export class TrackerSignallingMesh {
       uploaded: 0,
       downloaded: 0,
       left: 0,
-      numwant: signal.target ? 0 : 1,
+      numwant: 10,
       offers: [
         {
           offer_id: signalId,
@@ -174,10 +174,6 @@ export class TrackerSignallingMesh {
         },
       ],
     };
-
-    if (signal.target) {
-      announce.to_peer_id = normalizeTrackerInfoHash(signal.target) ?? signal.target;
-    }
 
     const payload = JSON.stringify(announce);
     for (const socket of this.sockets.values()) {
