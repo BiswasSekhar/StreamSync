@@ -338,6 +338,9 @@ export class JoinWebRTC {
 
   private connectViaTracker(infoHash: string, trackerUrls?: string[]) {
     this.roomId = infoHash.toUpperCase();
+    // Hosts advertise with the room hash as their deterministic tracker peer
+    // ID. This avoids relying on a tracker to choose the correct random peer.
+    this.hostPeerId = infoHash.toLowerCase();
     this.trackerSignalling = new TrackerSignallingMesh({
       infoHash,
       trackerUrls,

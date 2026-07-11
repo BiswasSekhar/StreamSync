@@ -86,7 +86,10 @@ export class MpvClient {
         vo: "gpu-next",
         hwdec: "auto-safe",
         "keep-open": "yes",
-        "force-window": "yes",
+        // Never fall back to an unmanaged external mpv window. The plugin
+        // supplies `wid` for the Tauri window; if that cannot be embedded we
+        // want an explicit playback error instead of a second application UI.
+        "force-window": "no",
         idle: "yes",
         // Stream-friendly buffering: the guest plays a file librqbit is still
         // writing, so keep a generous demuxer read-ahead + cache.

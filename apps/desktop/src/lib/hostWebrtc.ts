@@ -210,6 +210,9 @@ export class HostWebRTC {
     this.roomId = infoHash.toUpperCase();
     this.trackerSignalling = new TrackerSignallingMesh({
       infoHash,
+      // The room's info hash doubles as the host's stable tracker address so
+      // guests can send a directed join request immediately.
+      peerId: infoHash,
       trackerUrls,
       onSignal: (signal, senderPeerId) => this.handleSignal(signal, senderPeerId),
       onOpen: () => {

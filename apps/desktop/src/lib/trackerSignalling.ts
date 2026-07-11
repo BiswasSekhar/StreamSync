@@ -21,6 +21,7 @@ interface TrackerIncomingAnnounce {
   peer_id?: string;
   offer?: unknown;
   answer?: unknown;
+  "failure reason"?: string;
 }
 
 interface TrackerSignallingOptions {
@@ -44,6 +45,32 @@ export function normalizeTrackerInfoHash(input: string): string | null {
 
 export function toTrackerRoomUri(infoHash: string): string {
   return `tracker://${infoHash.toLowerCase()}`;
+}
+
+/** WebTorrent's WebSocket tracker protocol transports 20-byte values as
+ * JavaScript "binary strings", not their 40-character hexadecimal form. */
+export function trackerHexToBinary(hex: string): string {
+  const normalized = normalizeTrackerInfoHash(hex);
+  if (!normalized) {
+    throw new Error(`Invalid 20-byte tracker value: ${hex}`);
+  }
+
+  let binary = "";
+  for (let index = 0; index < normalized.length; index += 2) {
+    binary += String.fromCharCode(Number.parseInt(normalized.slice(index, index + 2), 16));
+  }
+  return binary;
+}
+
+export function trackerBinaryToHex(binary: string): string | null {
+  // Accept hex as a compatibility aid for non-WebTorrent signalling servers.
+  const alreadyHex = normalizeTrackerInfoHash(binary);
+  if (alreadyHex) return alreadyHex;
+  if (binary.length !== 20) return null;
+
+  return Array.from(binary, (char) =>
+    char.charCodeAt(0).toString(16).padStart(2, "0"),
+  ).join("");
 }
 
 function randomHex(bytes = 20): string {
@@ -161,19 +188,29 @@ export class TrackerSignallingMesh {
 
     const announce: Record<string, unknown> = {
       action: "announce",
-      info_hash: this.infoHash,
-      peer_id: this.peerId,
+      info_hash: trackerHexToBinary(this.infoHash),
+      peer_id: trackerHexToBinary(this.peerId),
       uploaded: 0,
       downloaded: 0,
       left: 0,
-      numwant: 10,
-      offers: [
+    };
+
+    const target = normalizeTrackerInfoHash(signal.target ?? "");
+    if (target) {
+      // The tracker forwards `answer` payloads directly to `to_peer_id`.
+      // We use that directed path for all StreamSync signalling envelopes.
+      announce.answer = envelope;
+      announce.to_peer_id = trackerHexToBinary(target);
+      announce.offer_id = trackerHexToBinary(randomHex(20));
+    } else {
+      // Untargeted discovery is retained for backwards-compatible room codes.
+      announce.offers = [
         {
-          offer_id: signalId,
+          offer_id: trackerHexToBinary(randomHex(20)),
           offer: envelope,
         },
-      ],
-    };
+      ];
+    }
 
     const payload = JSON.stringify(announce);
     for (const socket of this.sockets.values()) {
@@ -242,12 +279,11 @@ export class TrackerSignallingMesh {
 
     const payload: Record<string, unknown> = {
       action: "announce",
-      info_hash: this.infoHash,
-      peer_id: this.peerId,
+      info_hash: trackerHexToBinary(this.infoHash),
+      peer_id: trackerHexToBinary(this.peerId),
       uploaded: 0,
       downloaded: 0,
       left: 0,
-      numwant: 10,
     };
 
     if (event) payload.event = event;
@@ -271,7 +307,12 @@ export class TrackerSignallingMesh {
 
     if (parsed.action !== "announce") return;
 
-    const senderPeerId = normalizeTrackerInfoHash(parsed.peer_id ?? "");
+    if (parsed["failure reason"]) {
+      this.onWarning?.(`Tracker rejected announce: ${parsed["failure reason"]}`);
+      return;
+    }
+
+    const senderPeerId = trackerBinaryToHex(parsed.peer_id ?? "");
     if (!senderPeerId || senderPeerId === this.peerId) return;
 
     this.consumePotentialSignal(parsed.offer, senderPeerId);
