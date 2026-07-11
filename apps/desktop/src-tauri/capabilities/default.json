@@ -30,6 +30,7 @@
     "fs:allow-download-read-recursive",
     "fs:allow-download-write-recursive",
     "fs:allow-video-read-recursive",
-    "fs:allow-document-read-recursive"
+    "fs:allow-document-read-recursive",
+    "libmpv:default"
   ]
 }

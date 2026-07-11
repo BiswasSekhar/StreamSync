@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from "react";
 import { useSessionStore } from "../store/session";
-import { VideoPlayer } from "../components/VideoPlayer";
-import { VideoOverlay } from "../components/VideoOverlay";
+import { MpvHost } from "../components/MpvHost";
+import { MpvOverlay } from "../components/MpvOverlay";
+import type { MpvClient } from "../lib/mpvClient";
 import { RoomLink } from "../components/RoomLink";
 import { HostWebRTC, JoinRequest } from "../lib/hostWebrtc";
 
@@ -17,20 +18,40 @@ export function Session() {
   // Pending join requests (peerId → displayName)
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
 
-  // Video element (exposed by VideoPlayer via onVideoRef)
-  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
-  const handleVideoRef = useCallback((el: HTMLVideoElement | null) => setVideoEl(el), []);
+  // Embedded mpv player (replaces the legacy MSE <video> + VideoPlayer).
+  const [mpvClient, setMpvClient] = useState<MpvClient | null>(null);
+  const mpvClientRef = useRef<MpvClient | null>(null);
+  const [mpvPos, setMpvPos] = useState(0);
+  const [mpvDur, setMpvDur] = useState(0);
+  const [mpvPaused, setMpvPaused] = useState(true);
+  const [mpvBuffering, setMpvBuffering] = useState(false);
+
+  const handleMpvReady = useCallback((client: MpvClient) => {
+    mpvClientRef.current = client;
+    setMpvClient(client);
+    const path = useSessionStore.getState().filePath;
+    if (path) {
+      void (async () => {
+        try {
+          await client.load(path);
+          await client.play();
+        } catch (e) {
+          console.error("[Session] mpv load failed:", e);
+        }
+      })();
+    }
+  }, []);
 
   // ── Stable playback control callback ──
-  // Using a ref so the HostWebRTC useEffect doesn't re-run when videoEl changes,
-  // which would disconnect/reconnect receivers (the "wait for host" bug).
+  // Using a ref so the HostWebRTC useEffect doesn't re-run, which would
+  // disconnect/reconnect receivers (the "wait for host" bug). Drives mpv.
   const playbackControlRef = useRef<(action: "play" | "pause" | "seek", position: number, peerId: string) => void>(() => {});
   playbackControlRef.current = (action, position) => {
-    const v = videoEl;
-    if (!v) return;
-    if (action === "seek") v.currentTime = position;
-    if (action === "play" && v.paused) v.play().catch(console.error);
-    if (action === "pause" && !v.paused) v.pause();
+    const c = mpvClientRef.current;
+    if (!c) return;
+    if (action === "seek") void c.seek(position);
+    if (action === "play") void c.play();
+    if (action === "pause") void c.pause();
   };
   const stableOnPlaybackControl = useCallback(
     (action: "play" | "pause" | "seek", position: number, peerId: string) =>
@@ -108,13 +129,16 @@ export function Session() {
     // If encode is already complete (effect re-runs), inform the new RTC instance immediately
     const store = useSessionStore.getState();
     if (store.encodeComplete && store.probeResult && store.filePath) {
-      const fileName = store.filePath.split(/[\\/]/).pop() ?? "video.mp4";
+      const fileName = store.isTorrentSource
+        ? (store.torrentFileName ?? "torrent-video")
+        : (store.filePath.split(/[\\/]/).pop() ?? "video.mp4");
       rtc.setVideoReady(
         fileName,
         store.probeResult.codecHint,
         store.probeResult.fileSizeBytes,
         store.probeResult.durationSeconds,
         store.magnetLink ?? undefined,
+        store.selectedTorrentFileId ?? undefined,
       );
     }
 
@@ -125,18 +149,24 @@ export function Session() {
   const probeResult = useSessionStore(s => s.probeResult);
   const filePath = useSessionStore(s => s.filePath);
   const magnetLink = useSessionStore(s => s.magnetLink);
+  const isTorrentSource = useSessionStore(s => s.isTorrentSource);
+  const torrentFileName = useSessionStore(s => s.torrentFileName);
+  const selectedTorrentFileId = useSessionStore(s => s.selectedTorrentFileId);
   useEffect(() => {
     if (encodeComplete && probeResult && hostRtcRef.current && filePath) {
-      const fileName = filePath.split(/[\\/]/).pop() ?? "video.mp4";
+      const fileName = isTorrentSource
+        ? (torrentFileName ?? "torrent-video")
+        : (filePath.split(/[\\/]/).pop() ?? "video.mp4");
       hostRtcRef.current.setVideoReady(
         fileName,
         probeResult.codecHint,
         probeResult.fileSizeBytes,
         probeResult.durationSeconds,
         magnetLink ?? undefined,
+        selectedTorrentFileId ?? undefined,
       );
     }
-  }, [encodeComplete, probeResult, filePath, magnetLink]);
+  }, [encodeComplete, probeResult, filePath, magnetLink, isTorrentSource, torrentFileName, selectedTorrentFileId]);
 
   // Broadcast host play/pause/seek position
   useEffect(() => {
@@ -161,10 +191,6 @@ export function Session() {
     });
     return unsub;
   }, [displayName]);
-
-  const handleHeartbeat = useCallback((pos: number, play: boolean) => {
-    hostRtcRef.current?.broadcastSync(pos, play);
-  }, []);
 
   // Camera toggle
   const toggleCamera = useCallback(async (deviceId?: string) => {
@@ -274,12 +300,18 @@ export function Session() {
   const rightShift = chatOpen ? 340 : 0;
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#000", overflow: "hidden", fontFamily: "Inter, system-ui, sans-serif" }}>
+    <div style={{ position: "fixed", inset: 0, background: "transparent", overflow: "hidden", fontFamily: "Inter, system-ui, sans-serif" }}>
 
-      {/* ── Fullscreen video ── */}
+      {/* ── Fullscreen video (mpv renders behind the transparent webview) ── */}
       <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, right: rightShift, transition: "right 0.28s ease" }}>
-        <VideoPlayer onVideoRef={handleVideoRef} onHeartbeat={handleHeartbeat} />
-        {videoEl && <VideoOverlay videoEl={videoEl} />}
+        <MpvHost
+          onReady={handleMpvReady}
+          onTimePos={(s) => { setMpvPos(s); useSessionStore.setState({ position: s }); }}
+          onDuration={setMpvDur}
+          onPauseChange={(p) => { setMpvPaused(p); useSessionStore.setState({ isPlaying: !p }); }}
+          onBuffering={setMpvBuffering}
+        />
+        <MpvOverlay client={mpvClient} position={mpvPos} duration={mpvDur} paused={mpvPaused} buffering={mpvBuffering} />
       </div>
 
       {/* ── PiP camera tiles ── */}

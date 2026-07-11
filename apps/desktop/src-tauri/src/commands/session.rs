@@ -25,7 +25,7 @@ pub async fn create_room(
     let selected_mode = mode
         .as_deref()
         .and_then(SignallingMode::parse)
-        .unwrap_or(SignallingMode::Tunnel);
+        .unwrap_or(SignallingMode::Tracker);
 
     crate::engine::tunnel::stop_tunnel(&state).await;
     crate::engine::tunnel::kill_existing_cloudflared();
@@ -95,6 +95,8 @@ pub async fn close_room(
     crate::engine::tunnel::stop_tunnel(&state).await;
     let mut torrent_stream = state.torrent_stream.lock().await;
     *torrent_stream = None;
+    let mut active_stream = state.active_stream.lock().await;
+    *active_stream = None;
     let mut sess = state.session.lock().await;
     *sess = None;
     let mut peers = state.peers.lock().await;

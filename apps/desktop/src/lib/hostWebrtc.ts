@@ -1,5 +1,7 @@
 // WebSocket signalling is handled by the local signaller on port 8787.
+import { invoke } from "@tauri-apps/api/core";
 import {
+  DEFAULT_RTC_CONFIG,
   MAX_VIEWERS_PER_ROOM,
   encodeChunkEnvelope,
   type ChatMessage,
@@ -44,7 +46,7 @@ const PEER_STALE_TIMEOUT_MS = 60_000;
 export class HostWebRTC {
   private peers = new Map<string, PeerChannels>();
   private pendingApproval = new Map<string, { displayName: string }>();
-  private videoInfo: { fileName: string; mimeCodec: string; fileSize: number; durationSeconds: number; magnetLink?: string } | null = null;
+  private videoInfo: { fileName: string; mimeCodec: string; fileSize: number; durationSeconds: number; magnetLink?: string; torrentFileId?: number } | null = null;
   private localStream: MediaStream | null = null;
   private peerStreams = new Map<string, MediaStream>();
   private syncSeq = 0;
@@ -128,8 +130,8 @@ export class HostWebRTC {
     this.sendSignal({ type: 'join-denied', reason: 'The host declined your request', target: peerId });
   }
 
-  setVideoReady(fileName: string, mimeCodec: string, fileSize: number, durationSeconds: number, magnetLink?: string) {
-    this.videoInfo = { fileName, mimeCodec, fileSize, durationSeconds, magnetLink };
+  setVideoReady(fileName: string, mimeCodec: string, fileSize: number, durationSeconds: number, magnetLink?: string, torrentFileId?: number) {
+    this.videoInfo = { fileName, mimeCodec, fileSize, durationSeconds, magnetLink, torrentFileId };
     for (const [, peer] of this.peers) {
       this.sendVideoReadyToPeer(peer);
     }
@@ -359,12 +361,7 @@ export class HostWebRTC {
   }
 
   private async createOfferForPeer(peerId: string, displayName: string) {
-    const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
-    });
+    const pc = new RTCPeerConnection(DEFAULT_RTC_CONFIG);
 
     const videoTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' });
     const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
@@ -430,25 +427,47 @@ export class HostWebRTC {
           return;
         }
 
-        const headers: HeadersInit = req.range ? { 'Range': req.range } : {};
-        const response = await fetch('http://localhost:8787/host-video', { headers });
-        if (!response.ok && response.status !== 206) {
+        const totalSize = this.videoInfo?.fileSize ?? 0;
+        const parsed = parseRangeHeader(req.range ?? '', totalSize);
+        if (!parsed) {
           mediaDc.send(JSON.stringify({
             type: 'WEBRTC_CHUNK_ERROR',
             reqId: req.reqId,
             chunkId: req.chunkId,
+            reason: 'invalid-range',
+          }));
+          return;
+        }
+        const { start, end } = parsed;
+
+        // Read bytes from the host's local video / torrent stream via
+        // the Tauri IPC bridge — no HTTP, no localhost, works in pure
+        // tracker mode.
+        let arrayBuffer: ArrayBuffer;
+        try {
+          const result = await invoke<ArrayBuffer>('read_video_chunk', { start, end });
+          arrayBuffer = result instanceof ArrayBuffer ? result : new Uint8Array(result as ArrayLike<number>).buffer;
+        } catch (readErr) {
+          console.error('[HostWebRTC] read_video_chunk failed', readErr);
+          mediaDc.send(JSON.stringify({
+            type: 'WEBRTC_CHUNK_ERROR',
+            reqId: req.reqId,
+            chunkId: req.chunkId,
+            reason: String(readErr),
           }));
           return;
         }
 
-        const arrayBuffer = await response.arrayBuffer();
         const hasChunkId = Number.isInteger(req.chunkId) && req.chunkId >= 0;
+        const actualEnd = start + arrayBuffer.byteLength - 1;
         const meta: WebRtcChunkResponseMetaMessage = {
           type: 'WEBRTC_CHUNK_RESPONSE',
           reqId: req.reqId,
           chunkId: hasChunkId ? req.chunkId : 0,
           size: arrayBuffer.byteLength,
-          contentRange: response.headers.get('Content-Range') ?? '',
+          contentRange: totalSize > 0
+            ? `bytes ${start}-${actualEnd}/${totalSize}`
+            : `bytes ${start}-${actualEnd}/*`,
         };
 
         // Send metadata first, then the binary payload.
@@ -621,6 +640,7 @@ export class HostWebRTC {
         fileSize: this.videoInfo.fileSize,
         durationSeconds: this.videoInfo.durationSeconds,
         magnetLink: this.videoInfo.magnetLink ?? null,
+        torrentFileId: this.videoInfo.torrentFileId ?? null,
       };
       peer.controlDc.send(
         JSON.stringify(ready),
@@ -638,4 +658,37 @@ export class HostWebRTC {
     this.peerLastSeenAt.delete(peerId);
     this.peerStreams.delete(peerId);
   }
+}
+
+/**
+ * Parse an HTTP-style `Range: bytes=N-M` header against a known total size.
+ * Matches the semantics of the deleted Axum `parse_range` so receivers
+ * built against the old `/host-video` endpoint keep working unchanged.
+ * Returns inclusive `{start, end}` or `null` for malformed input.
+ */
+const DEFAULT_CHUNK_BYTES = 2 * 1024 * 1024;
+function parseRangeHeader(header: string, totalSize: number): { start: number; end: number } | null {
+  if (totalSize > 0) {
+    if (!header) {
+      return { start: 0, end: Math.max(0, totalSize - 1) };
+    }
+  } else if (!header) {
+    return null;
+  }
+  const spec = header.startsWith('bytes=') ? header.slice('bytes='.length) : header;
+  const [rawStart, rawEnd] = spec.split('-', 2);
+  const start = Number(rawStart);
+  if (!Number.isFinite(start) || start < 0) return null;
+  let end: number;
+  if (rawEnd && rawEnd.trim().length > 0) {
+    const parsed = Number(rawEnd);
+    if (!Number.isFinite(parsed) || parsed < start) return null;
+    end = parsed;
+  } else {
+    end = start + DEFAULT_CHUNK_BYTES - 1;
+  }
+  if (totalSize > 0) {
+    end = Math.min(end, totalSize - 1);
+  }
+  return { start, end };
 }

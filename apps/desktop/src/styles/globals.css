@@ -55,6 +55,14 @@ body {
   overflow: hidden;
 }
 
+/* mpv embedding: the player (tauri-plugin-libmpv) renders into the native
+   window *behind* the WebView2 surface. For its frames to be visible the page
+   background must be transparent. MpvHost toggles `mpv-active` only while the
+   player screen is mounted, so every other screen keeps its opaque shell. */
+body.mpv-active {
+  background-color: transparent;
+}
+
 video {
   user-select: none;
 }

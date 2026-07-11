@@ -209,6 +209,15 @@ pub struct AppState {
     /// matching room id (or an empty string for "all rooms").
     pub room_close_tx: broadcast::Sender<String>,
     pub sync_sequence: std::sync::atomic::AtomicU64,
+    /// libp2p signaling actor (gossipsub + Kad-DHT + NAT traversal).
+    /// `None` until `p2p_start_session` is invoked.
+    pub p2p: Mutex<Option<Arc<crate::engine::libp2p_supervisor::SupervisorHandle>>>,
+    /// Shared librqbit session + localhost streaming server for the P2P
+    /// content layer. `None` until the first publish/open-magnet call.
+    pub torrent_stream_mgr: Mutex<Option<Arc<crate::engine::torrent_stream::TorrentStreamManager>>>,
+    /// The currently-active streamable torrent (info hash + stream URL),
+    /// returned by `p2p_torrent_local_path`.
+    pub active_stream: Mutex<Option<crate::engine::torrent_stream::StreamableTorrent>>,
 }
 
 impl AppState {
@@ -227,6 +236,9 @@ impl AppState {
             event_tx,
             room_close_tx,
             sync_sequence: std::sync::atomic::AtomicU64::new(0),
+            p2p: Mutex::new(None),
+            torrent_stream_mgr: Mutex::new(None),
+            active_stream: Mutex::new(None),
         })
     }
 

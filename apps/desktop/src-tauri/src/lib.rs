@@ -8,7 +8,7 @@ use tauri::Manager;
 use engine::signaller::CurrentFilePath;
 use tokio::sync::RwLock;
 
-use commands::{file::*, session::*, torrent::*};
+use commands::{file::*, session::*, torrent::*, media_chunk::*, p2p::*};
 
 pub fn run() {
     tracing_subscriber::fmt()
@@ -21,13 +21,14 @@ pub fn run() {
         .init();
 
     let app_state = state::AppState::new();
-    // Shared current file path — written by start_seeding_original, read by /host-video
+    // Shared current file path — written by start_seeding_original, read by read_video_chunk
     let current_file: CurrentFilePath = Arc::new(RwLock::new(None));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_libmpv::init())
         .manage(app_state.clone())
         .manage(current_file.clone())
         .setup(|app| {
@@ -91,6 +92,20 @@ pub fn run() {
             get_magnet,
             load_magnet_link,
             get_torrent_stats,
+            read_video_chunk,
+            get_video_size,
+            // libp2p signaling layer (Phase 3)
+            p2p_start_session,
+            p2p_publish_event,
+            p2p_get_stats,
+            p2p_close_session,
+            // BitTorrent content layer (Phase 3b)
+            p2p_publish_file,
+            p2p_open_magnet,
+            p2p_open_torrent_file,
+            p2p_get_active_torrent_stats,
+            p2p_select_torrent_video,
+            p2p_torrent_local_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

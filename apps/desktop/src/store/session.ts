@@ -120,9 +120,46 @@ type AppView = "home" | "session" | "join";
 
 export interface TorrentProgressInfo {
   downloadSpeedBps: number;
+  uploadSpeedBps: number;
   haveBytes: number;
   totalBytes: number;
   peerCount: number;
+}
+
+export interface TorrentVideoFile {
+  fileId: number;
+  fileName: string;
+  fileSize: number;
+}
+
+interface PublicTorrentOpenResult {
+  infoHash: string;
+  magnet: string;
+  fileName: string;
+  fileSize: number;
+  streamUrl: string;
+  selectedFileId: number;
+  videoFiles: TorrentVideoFile[];
+}
+
+function publicTorrentProbe(fileSizeBytes: number): VideoProbeResult {
+  return {
+    durationSeconds: 0,
+    width: 0,
+    height: 0,
+    codecName: "torrent",
+    containerFormat: "torrent",
+    bitrateKbps: 0,
+    fps: 0,
+    hasHdr: false,
+    audioCodec: "unknown",
+    needsTranscode: false,
+    needsRemux: false,
+    codecHint: "video/mp4",
+    estimatedEncodeSeconds: 0,
+    fileSizeBytes,
+    subtitleStreams: [],
+  };
 }
 
 interface SessionStore {
@@ -138,6 +175,8 @@ interface SessionStore {
   isTorrentSource: boolean;
   torrentFileName: string | null;
   torrentProgress: TorrentProgressInfo | null;
+  torrentVideoFiles: TorrentVideoFile[];
+  selectedTorrentFileId: number | null;
 
   // Encode state
   encodeProgress: EncodeProgress | null;
@@ -176,6 +215,9 @@ interface SessionStore {
   // Actions
   setFile: (path: string) => Promise<void>;
   loadTorrent: (path: string) => Promise<void>;
+  loadMagnet: (magnet: string) => Promise<void>;
+  selectTorrentVideo: (fileId: number) => Promise<void>;
+  refreshTorrentStats: () => Promise<void>;
   createRoom: (mode?: SignallingMode) => Promise<CreateRoomResponse>;
   setSignallingMode: (mode: SignallingMode) => void;
   joinRoom: (url: string) => void;
@@ -208,10 +250,12 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   isTorrentSource: false,
   torrentFileName: null,
   torrentProgress: null,
+  torrentVideoFiles: [],
+  selectedTorrentFileId: null,
   encodeProgress: null,
   encodeComplete: false,
   sessionId: null,
-  signallingMode: "tunnel",
+  signallingMode: "tracker",
   shareCode: null,
   trackerUrls: [],
   roomUrl: null,
@@ -247,6 +291,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         isTorrentSource: false,
         torrentFileName: null,
         torrentProgress: null,
+        torrentVideoFiles: [],
+        selectedTorrentFileId: null,
         encodeComplete: true,
         encodeProgress: null,
       });
@@ -258,20 +304,81 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   loadTorrent: async (path) => {
     clearTorrentProbeRetry();
     try {
-      await invoke("load_torrent_file", { path });
-      const torrentFileName = path.split(/[\\/]/).pop() ?? "Unknown torrent";
+      const opened = await invoke<PublicTorrentOpenResult>("p2p_open_torrent_file", {
+        torrentPath: path,
+      });
       set({
-        filePath: path,
-        probeResult: null,
+        filePath: opened.streamUrl,
+        probeResult: publicTorrentProbe(opened.fileSize),
         isTorrentSource: true,
-        torrentFileName,
+        torrentFileName: opened.fileName,
         torrentProgress: null,
+        torrentVideoFiles: opened.videoFiles,
+        selectedTorrentFileId: opened.selectedFileId,
+        magnetLink: opened.magnet,
         encodeComplete: true,   // mark ready so Create Room is enabled
         encodeProgress: null,
       });
       get().showToast("Torrent loading — connecting to swarm...", "info");
     } catch (e) {
       get().showToast(`Failed to load torrent: ${e}`, "error");
+    }
+  },
+
+  loadMagnet: async (magnet) => {
+    clearTorrentProbeRetry();
+    const normalized = magnet.trim();
+    if (!/^magnet:\?xt=urn:btih:/i.test(normalized)) {
+      get().showToast("Enter a valid BitTorrent magnet link", "warning");
+      return;
+    }
+    try {
+      const opened = await invoke<PublicTorrentOpenResult>("p2p_open_magnet", {
+        magnet: normalized,
+        broadcast: false,
+      });
+      set({
+        filePath: opened.streamUrl,
+        probeResult: publicTorrentProbe(opened.fileSize),
+        isTorrentSource: true,
+        torrentFileName: opened.fileName,
+        torrentProgress: null,
+        torrentVideoFiles: opened.videoFiles,
+        selectedTorrentFileId: opened.selectedFileId,
+        magnetLink: opened.magnet,
+        encodeComplete: true,
+        encodeProgress: null,
+      });
+      get().showToast("Public magnet ready - connecting to its swarm...", "info");
+    } catch (e) {
+      get().showToast(`Failed to open magnet: ${e}`, "error");
+    }
+  },
+
+  selectTorrentVideo: async (fileId) => {
+    try {
+      const selected = await invoke<PublicTorrentOpenResult>("p2p_select_torrent_video", {
+        fileId,
+      });
+      set({
+        filePath: selected.streamUrl,
+        probeResult: publicTorrentProbe(selected.fileSize),
+        torrentFileName: selected.fileName,
+        torrentVideoFiles: selected.videoFiles,
+        selectedTorrentFileId: selected.selectedFileId,
+      });
+      get().showToast(`Selected ${selected.fileName}`, "success");
+    } catch (error) {
+      get().showToast(`Failed to select torrent video: ${error}`, "error");
+    }
+  },
+
+  refreshTorrentStats: async () => {
+    try {
+      const progress = await invoke<TorrentProgressInfo>("p2p_get_active_torrent_stats");
+      set({ torrentProgress: progress });
+    } catch {
+      // The torrent may be closing or metadata may not be ready yet.
     }
   },
 
@@ -284,7 +391,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         // Prepare video for DataChannel streaming (remux/transcode as needed)
         await invoke("prepare_video_for_streaming", { path: filePath });
       }
-      // For torrent source, load_torrent_file already kicked off the download
+      // Public torrent sources are already active in the shared librqbit session.
 
       const selectedMode = mode ?? get().signallingMode;
       const response = await invoke<CreateRoomResponse>("create_room", { mode: selectedMode });
@@ -416,6 +523,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       isTorrentSource: false,
       torrentFileName: null,
       torrentProgress: null,
+      torrentVideoFiles: [],
+      selectedTorrentFileId: null,
       tunnelConnected: false,
       tunnelUrl: null,
     });

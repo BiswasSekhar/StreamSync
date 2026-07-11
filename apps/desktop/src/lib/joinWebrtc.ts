@@ -1,5 +1,6 @@
 import { SyncController } from "./sync";
 import {
+  DEFAULT_RTC_CONFIG,
   decodeChunkEnvelope,
   type ChatMessage as SharedChatMessage,
   type PlaybackControlMessage,
@@ -536,12 +537,7 @@ export class JoinWebRTC {
   private async handleOffer(sdp: string, hostPeerId: string): Promise<void> {
     this.hostPeerId = hostPeerId;
 
-    this.pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
-    });
+    this.pc = new RTCPeerConnection(DEFAULT_RTC_CONFIG);
 
     this.pc.ontrack = (e) => {
       const stream = e.streams?.[0];

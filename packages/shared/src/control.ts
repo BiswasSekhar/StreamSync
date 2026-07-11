@@ -12,6 +12,7 @@ export interface VideoReadyControlMessage {
   fileSize: number;
   durationSeconds: number;
   magnetLink?: string | null;
+  torrentFileId?: number | null;
 }
 
 export interface SyncMessage {

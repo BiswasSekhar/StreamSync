@@ -1,7 +1,6 @@
 import { useRef, useEffect, useCallback } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { useSessionStore } from "../store/session";
-
-const HOST_VIDEO_URL = "http://localhost:8787/host-video";
 
 interface Props {
   onVideoRef?: (el: HTMLVideoElement | null) => void;
@@ -18,7 +17,9 @@ export function VideoPlayer({ onVideoRef, onHeartbeat }: Props) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !filePath) return;
-    video.src = `${HOST_VIDEO_URL}?t=${Date.now()}`;
+    // Tauri's asset protocol — reads the file directly from disk with
+    // native Range support. No HTTP server, no localhost dependency.
+    video.src = convertFileSrc(filePath);
     video.load();
   }, [filePath]);
 

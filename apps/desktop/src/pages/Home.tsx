@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
-import type { TorrentProgressInfo } from "../store/session";
+import type { TorrentProgressInfo, TorrentVideoFile } from "../store/session";
 import type { SignallingMode } from "@streamsync/shared";
 import { Settings } from "./Settings";
 
@@ -10,8 +10,10 @@ type HomeMode = "landing" | "host" | "join";
 
 export function Home() {
   const {
-    setFile, probeResult, filePath,
+    setFile, loadMagnet, probeResult, filePath,
     isTorrentSource, torrentFileName, torrentProgress,
+    torrentVideoFiles, selectedTorrentFileId,
+    selectTorrentVideo, refreshTorrentStats,
     createRoom, roomUrl, sessionId, joinRoom,
     signallingMode, setSignallingMode,
     shareCode,
@@ -26,6 +28,7 @@ export function Home() {
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [roomTimeout, setRoomTimeout] = useState(false);
   const [joinUrl, setJoinUrl] = useState("");
+  const [magnetInput, setMagnetInput] = useState("");
   // 20-second timeout while waiting for room setup
   useEffect(() => {
     if (!creatingRoom) { setRoomTimeout(false); return; }
@@ -36,6 +39,13 @@ export function Home() {
   useEffect(() => {
     // Hardware detection not needed in direct seeding mode
   }, []);
+
+  useEffect(() => {
+    if (!isTorrentSource) return;
+    void refreshTorrentStats();
+    const timer = setInterval(() => void refreshTorrentStats(), 2_000);
+    return () => clearInterval(timer);
+  }, [isTorrentSource, refreshTorrentStats]);
 
   // Tauri native drag-drop listener (HTML5 ondrop does NOT give file paths in Tauri)
   useEffect(() => {
@@ -144,6 +154,20 @@ export function Home() {
     sessionStorage.setItem("streamsync_name", name);
   };
 
+  const handleOpenMagnet = async () => {
+    const magnet = magnetInput.trim();
+    if (!magnet) {
+      showToast("Paste a public magnet link first", "warning");
+      return;
+    }
+    setLoading(true);
+    try {
+      await loadMagnet(magnet);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const signalModeButton = (mode: SignallingMode, title: string, subtitle: string) => {
     const active = signallingMode === mode;
     return (
@@ -204,6 +228,7 @@ export function Home() {
                 useSessionStore.setState({
                   filePath: null, probeResult: null,
                   isTorrentSource: false, torrentFileName: null, torrentProgress: null,
+                  torrentVideoFiles: [], selectedTorrentFileId: null,
                   encodeProgress: null, encodeComplete: false,
                   roomUrl: null, sessionId: null,
                   shareCode: null,
@@ -351,36 +376,57 @@ export function Home() {
 
               {/* Drop zone or file info */}
               {!probeResult && !isTorrentSource ? (
-                <div
-                  className={`drop-zone ${dragging ? "dragging" : ""} ${loading ? "loading" : ""}`}
-                  onClick={handleBrowse}
-                >
-                  <div className="drop-zone-inner">
-                    <div className="drop-icon-wrapper">
-                      <svg width="40" height="40" fill="none" stroke="#6366f1" strokeWidth="1.5" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.847v6.306a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
-                      </svg>
-                    </div>
-                    <div>
-                      <p className="drop-title">
-                        {loading ? "Analyzing file..." : "Drop your video or .torrent here"}
-                      </p>
-                      <p className="drop-subtitle">or click to browse files</p>
-                    </div>
-                    <div className="drop-formats">
-                      {["MP4", "MKV", "AVI", "MOV", "TS", "WMV", "FLV", "TORRENT"].map((f) => (
-                        <span key={f} className={`format-chip${f === "TORRENT" ? " torrent-chip" : ""}`}>{f}</span>
-                      ))}
+                <>
+                  <div
+                    className={`drop-zone ${dragging ? "dragging" : ""} ${loading ? "loading" : ""}`}
+                    onClick={handleBrowse}
+                  >
+                    <div className="drop-zone-inner">
+                      <div className="drop-icon-wrapper">
+                        <svg width="40" height="40" fill="none" stroke="#6366f1" strokeWidth="1.5" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.847v6.306a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="drop-title">
+                          {loading ? "Opening public source..." : "Drop your video or .torrent here"}
+                        </p>
+                        <p className="drop-subtitle">or click to browse files</p>
+                      </div>
+                      <div className="drop-formats">
+                        {["MP4", "MKV", "AVI", "MOV", "TS", "WMV", "FLV", "TORRENT"].map((f) => (
+                          <span key={f} className={`format-chip${f === "TORRENT" ? " torrent-chip" : ""}`}>{f}</span>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
+                  <div style={{ display: "flex", gap: 8, width: "100%" }}>
+                    <input
+                      type="text"
+                      value={magnetInput}
+                      onChange={(event) => setMagnetInput(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Enter") void handleOpenMagnet(); }}
+                      placeholder="Or paste a public magnet link"
+                      aria-label="Public magnet link"
+                      style={{ flex: 1, minWidth: 0, padding: "10px 12px", background: "rgba(0,0,0,0.4)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#f1f5f9", fontSize: 13 }}
+                    />
+                    <button type="button" onClick={() => void handleOpenMagnet()} disabled={loading} className="btn-ghost">
+                      Open Magnet
+                    </button>
+                  </div>
+                </>
               ) : isTorrentSource ? (
                 <TorrentInfoCard
                   torrentFileName={torrentFileName}
                   torrentProgress={torrentProgress}
+                  videoFiles={torrentVideoFiles}
+                  selectedFileId={selectedTorrentFileId}
+                  onSelectFile={(fileId) => void selectTorrentVideo(fileId)}
                   onClear={() => useSessionStore.setState({
                     filePath: null, probeResult: null,
                     isTorrentSource: false, torrentFileName: null, torrentProgress: null,
+                    torrentVideoFiles: [], selectedTorrentFileId: null,
+                    magnetLink: null,
                     encodeProgress: null, encodeComplete: false,
                     roomUrl: null, sessionId: null,
                     shareCode: null,
@@ -546,16 +592,23 @@ export function Home() {
 function TorrentInfoCard({
   torrentFileName,
   torrentProgress,
+  videoFiles,
+  selectedFileId,
+  onSelectFile,
   onClear,
 }: {
   torrentFileName: string | null;
   torrentProgress: TorrentProgressInfo | null;
+  videoFiles: TorrentVideoFile[];
+  selectedFileId: number | null;
+  onSelectFile: (fileId: number) => void;
   onClear: () => void;
 }) {
   const displayName = torrentFileName ?? "Loading torrent…";
   const haveBytes = torrentProgress?.haveBytes ?? 0;
   const totalBytes = torrentProgress?.totalBytes ?? 0;
   const dlSpeed = torrentProgress?.downloadSpeedBps ?? 0;
+  const ulSpeed = torrentProgress?.uploadSpeedBps ?? 0;
   const peers = torrentProgress?.peerCount ?? 0;
   const percent = totalBytes > 0 ? Math.min(100, Math.round((haveBytes / totalBytes) * 100)) : 0;
 
@@ -591,6 +644,7 @@ function TorrentInfoCard({
               <>
                 <span className="info-pill">{peers} peer{peers !== 1 ? "s" : ""}</span>
                 <span className="info-pill">{fmtSpeed(dlSpeed)} ↓</span>
+                <span className="info-pill">{fmtSpeed(ulSpeed)} upload</span>
                 {totalBytes > 0 && (
                   <span className="info-pill">{fmtBytes(haveBytes)} / {fmtBytes(totalBytes)}</span>
                 )}
@@ -607,6 +661,25 @@ function TorrentInfoCard({
               <span className="torrent-progress-label">{percent}%</span>
             </div>
           )}
+          {videoFiles.length > 1 && (
+            <label style={{ display: "block", marginTop: 8, color: "#cbd5e1", fontSize: 11 }}>
+              Video file
+              <select
+                value={selectedFileId ?? ""}
+                onChange={(event) => onSelectFile(Number(event.target.value))}
+                style={{ display: "block", width: "100%", marginTop: 4, padding: "7px 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.14)", background: "rgba(0,0,0,0.45)", color: "#f1f5f9", fontSize: 12 }}
+              >
+                {videoFiles.map((file) => (
+                  <option key={file.fileId} value={file.fileId}>
+                    {file.fileName} ({fmtBytes(file.fileSize)})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <p style={{ margin: "8px 0 0", color: "#fbbf24", fontSize: 11, lineHeight: 1.4 }}>
+            Public mode: torrent metadata, file names, swarm activity, and your peer IP can be visible to trackers and connected peers.
+          </p>
         </div>
 
         <button onClick={onClear} className="btn-ghost">Change</button>

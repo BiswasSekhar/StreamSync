@@ -4,6 +4,9 @@ import { JoinWebRTC, CameraPermissionStatus, VideoReadyInfo, ChunkMeta } from ".
 import type { SyncMessage } from "@streamsync/shared";
 import { useSessionStore } from "../store/session";
 import { VideoOverlay } from "../components/VideoOverlay";
+import { MpvHost } from "../components/MpvHost";
+import { MpvOverlay } from "../components/MpvOverlay";
+import type { MpvClient } from "../lib/mpvClient";
 
 type Status = "connecting" | "waiting-approval" | "connected" | "streaming" | "playing" | "error" | "disconnected" | "denied" | "host-ended";
 interface ChatMsg { id: string; from: string; text: string; timestamp: number; }
@@ -29,6 +32,13 @@ export function JoinSession() {
   // Video
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
+  const [nativeTorrentUrl, setNativeTorrentUrl] = useState<string | null>(null);
+  const [nativeMpvClient, setNativeMpvClient] = useState<MpvClient | null>(null);
+  const nativeMpvRef = useRef<MpvClient | null>(null);
+  const [nativePosition, setNativePosition] = useState(0);
+  const [nativeDuration, setNativeDuration] = useState(0);
+  const [nativePaused, setNativePaused] = useState(true);
+  const [nativeBuffering, setNativeBuffering] = useState(false);
 
   // Camera / PiP
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -61,7 +71,6 @@ export function JoinSession() {
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const roomUrl = useSessionStore(s => s.joinRoomUrl);
   const trackerUrls = useSessionStore(s => s.trackerUrls);
-  const localTorrentFilePath = useSessionStore(s => s.filePath);
 
   // MSE DataChannel streaming state
   const mediaSourceRef = useRef<MediaSource | null>(null);
@@ -116,6 +125,21 @@ export function JoinSession() {
   useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chats]);
 
   const handleSync = useCallback((sync: SyncMessage) => {
+    const native = nativeMpvRef.current;
+    if (native) {
+      suppressControlRef.current = Date.now() + 500;
+      void (async () => {
+        const state = await native.getState();
+        const elapsed = sync.playing ? Math.max(0, (Date.now() - sync.timestamp) / 1000) : 0;
+        const target = sync.position + elapsed;
+        if (Math.abs(state.position - target) > 1.5) {
+          await native.seek(target);
+        }
+        if (sync.playing && state.paused) await native.play();
+        if (!sync.playing && !state.paused) await native.pause();
+      })().catch((error) => console.warn("[JoinSession] mpv sync failed", error));
+      return;
+    }
     const v = videoRef.current;
     if (v && rtcRef.current) {
       const changed = rtcRef.current.applySync(sync, v);
@@ -127,6 +151,9 @@ export function JoinSession() {
 
   const cleanupPlaybackTransport = useCallback((resetVideo = true) => {
     awaitingNativeTorrentRef.current = false;
+    nativeMpvRef.current = null;
+    setNativeMpvClient(null);
+    setNativeTorrentUrl(null);
 
     pendingRequests.current.clear();
     pendingChunks.current = [];
@@ -365,7 +392,20 @@ export function JoinSession() {
 
     try {
       console.log("[JoinSession] Starting native torrent receiver");
-      await invoke("load_magnet_link", { magnetLink: info.magnetLink });
+      const opened = await invoke<{
+        infoHash: string;
+        magnet: string;
+        fileName: string;
+        fileSize: number;
+        streamUrl: string;
+        selectedFileId: number;
+      }>("p2p_open_magnet", { magnet: info.magnetLink, broadcast: false });
+      const selected = info.torrentFileId != null && info.torrentFileId !== opened.selectedFileId
+        ? await invoke<typeof opened>("p2p_select_torrent_video", { fileId: info.torrentFileId })
+        : opened;
+      useSessionStore.setState({ filePath: selected.streamUrl, torrentFileName: selected.fileName });
+      setFileName(selected.fileName);
+      setNativeTorrentUrl(selected.streamUrl);
     } catch (error) {
       awaitingNativeTorrentRef.current = false;
       console.error("[JoinSession] Failed to start native torrent receiver", error);
@@ -409,39 +449,29 @@ export function JoinSession() {
     showToast(reason, "error");
   }, [cleanupPlaybackTransport, showToast]);
 
-  useEffect(() => {
-    if (!awaitingNativeTorrentRef.current || !localTorrentFilePath) return;
-
-    const video = videoRef.current;
-    if (!video) return;
-
-    const localHostVideoUrl = `http://localhost:8787/host-video?t=${Date.now()}`;
-    console.log("[JoinSession] Native torrent video ready:", localHostVideoUrl);
-
-    const handleCanPlay = () => {
-      if (statusRef.current !== "playing") {
-        setStatus("playing");
-      }
-      if (pendingSyncRef.current && rtcRef.current) {
-        rtcRef.current.applySync(pendingSyncRef.current, video);
-        pendingSyncRef.current = null;
-      }
-    };
-
-    const handleError = () => {
-      console.error("[JoinSession] Native torrent playback failed");
+  const handleNativeMpvReady = useCallback(async (client: MpvClient) => {
+    if (!nativeTorrentUrl) return;
+    nativeMpvRef.current = client;
+    setNativeMpvClient(client);
+    try {
+      await client.load(nativeTorrentUrl);
+      await client.play();
       awaitingNativeTorrentRef.current = false;
-      video.removeEventListener("canplay", handleCanPlay);
-      video.removeEventListener("error", handleError);
+      setStatus("playing");
+      if (pendingSyncRef.current) {
+        const sync = pendingSyncRef.current;
+        pendingSyncRef.current = null;
+        suppressControlRef.current = Date.now() + 500;
+        const elapsed = sync.playing ? Math.max(0, (Date.now() - sync.timestamp) / 1000) : 0;
+        await client.seek(sync.position + elapsed);
+        if (!sync.playing) await client.pause();
+      }
+    } catch (error) {
+      console.error("[JoinSession] Native torrent playback failed", error);
       showToast("Torrent video playback failed", "error");
       setStatus("error");
-    };
-
-    video.addEventListener("canplay", handleCanPlay, { once: true });
-    video.addEventListener("error", handleError, { once: true });
-    video.src = localHostVideoUrl;
-    video.load();
-  }, [localTorrentFilePath, showToast]);
+    }
+  }, [nativeTorrentUrl, showToast]);
 
   useEffect(() => {
     if (!roomUrl) { setError("No room link"); setStatus("error"); return; }
@@ -489,8 +519,9 @@ export function JoinSession() {
 
   const sendControl = useCallback((action: "play" | "pause" | "seek") => {
     if (Date.now() < suppressControlRef.current) return;
-    rtcRef.current?.sendPlaybackControl(action, videoRef.current?.currentTime ?? 0);
-  }, []);
+    const position = nativeMpvRef.current ? nativePosition : (videoRef.current?.currentTime ?? 0);
+    rtcRef.current?.sendPlaybackControl(action, position);
+  }, [nativePosition]);
 
   const sendChat = () => {
     const text = chatInput.trim();
@@ -607,7 +638,7 @@ export function JoinSession() {
   const shapeRadius = (s: CamShape) => s === "circle" ? "50%" : s === "rounded" ? "12px" : "4px";
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#000", overflow: "hidden", fontFamily: "Inter, system-ui, sans-serif" }}>
+    <div style={{ position: "fixed", inset: 0, background: nativeTorrentUrl ? "transparent" : "#000", overflow: "hidden", fontFamily: "Inter, system-ui, sans-serif" }}>
 
       {/* ── Connection states ── */}
       {(status === "connecting" || status === "connected" || status === "waiting-approval") && (
@@ -664,14 +695,38 @@ export function JoinSession() {
 
       {/* ── Fullscreen video ── */}
       <div style={{ position: "absolute", top: 0, left: 0, bottom: 0, right: chatOpen ? 340 : 0, transition: "right 0.28s ease", display: (status === "streaming" || status === "playing") ? "block" : "none" }}>
-        <video
-          ref={videoRef}
-          onPlay={() => sendControl("play")}
-          onPause={() => sendControl("pause")}
-          onSeeked={() => sendControl("seek")}
-          style={{ width: "100%", height: "100%", objectFit: "contain" }}
-        />
-        {videoEl && <VideoOverlay videoEl={videoEl} />}
+        {nativeTorrentUrl ? (
+          <>
+            <MpvHost
+              onReady={handleNativeMpvReady}
+              onTimePos={setNativePosition}
+              onDuration={setNativeDuration}
+              onPauseChange={(paused) => {
+                setNativePaused(paused);
+                sendControl(paused ? "pause" : "play");
+              }}
+              onBuffering={setNativeBuffering}
+            />
+            <MpvOverlay
+              client={nativeMpvClient}
+              position={nativePosition}
+              duration={nativeDuration}
+              paused={nativePaused}
+              buffering={nativeBuffering}
+            />
+          </>
+        ) : (
+          <>
+            <video
+              ref={videoRef}
+              onPlay={() => sendControl("play")}
+              onPause={() => sendControl("pause")}
+              onSeeked={() => sendControl("seek")}
+              style={{ width: "100%", height: "100%", objectFit: "contain" }}
+            />
+            {videoEl && <VideoOverlay videoEl={videoEl} />}
+          </>
+        )}
       </div>
 
       {/* ── PiP camera tiles ── */}

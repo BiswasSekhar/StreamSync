@@ -5,3 +5,7 @@ export * from "./signalling";
 export * from "./control";
 export * from "./commands";
 export * from "./events";
+export * from "./shareCode";
+export * from "./crypto";
+export * from "./iceServers";
+export * from "./relay";

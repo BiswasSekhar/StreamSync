@@ -16,11 +16,9 @@ import {
 } from "react-native-webrtc";
 import { useTorrentWebView } from "../lib/torrentWebView";
 import { MobileSyncController, SyncMessage } from "../lib/sync";
+import { EXPANDED_STUN_POOL } from "@streamsync/shared";
 
-const ICE_SERVERS = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-];
+const ICE_SERVERS = EXPANDED_STUN_POOL;
 
 interface Props {
   route: { params: { roomUrl: string } };

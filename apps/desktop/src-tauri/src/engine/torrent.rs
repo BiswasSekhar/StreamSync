@@ -115,11 +115,15 @@ pub async fn start_seeding(
 
     tracing::info!("Torrent created, adding to session");
 
-    // Step 2: Create librqbit session with DHT disabled.
-    // DHT often fails inside desktop apps (port conflicts, firewall) and kills the session.
-    // We rely on WebTorrent trackers for peer discovery instead.
+    // Mainline DHT is the trackerless discovery substrate for the
+    // serverless P2P model — see plan section "Content layer". The old
+    // comment about disabling for "port conflicts" predates the UPnP
+    // port-forwarding fix; with `enable_upnp_port_forwarding` librqbit
+    // negotiates an inbound port automatically and DHT works reliably.
     let mut opts = SessionOptions::default();
-    opts.disable_dht_persistence = true;
+    opts.disable_dht = false;
+    opts.disable_dht_persistence = false;
+    opts.enable_upnp_port_forwarding = true;
     opts.listen_port_range = Some(6881..65535);
 
     let session = Session::new_with_opts(output_dir, opts)
@@ -244,8 +248,9 @@ pub async fn load_external_torrent(
     tracing::info!("Loading external torrent into: {:?}", download_dir);
 
     let mut opts = SessionOptions::default();
-    opts.disable_dht = true;
-    opts.disable_dht_persistence = true;
+    opts.disable_dht = false;
+    opts.disable_dht_persistence = false;
+    opts.enable_upnp_port_forwarding = true;
     opts.listen_port_range = Some(6881..65535);
 
     let session = Session::new_with_opts(download_dir.clone(), opts)
@@ -377,7 +382,9 @@ pub async fn load_magnet(
     tracing::info!("Loading magnet link into: {:?}", download_dir);
 
     let mut opts = SessionOptions::default();
-    opts.disable_dht_persistence = true;
+    opts.disable_dht = false;
+    opts.disable_dht_persistence = false;
+    opts.enable_upnp_port_forwarding = true;
     opts.listen_port_range = Some(6881..65535);
 
     let session = Session::new_with_opts(download_dir.clone(), opts)

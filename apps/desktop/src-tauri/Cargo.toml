@@ -28,8 +28,12 @@ tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 # WebRTC
 webrtc = "0.12"
 
-# Torrent (librqbit actual version on crates.io)
-librqbit = { version = "8", default-features = false, features = ["default-tls"] }
+# Torrent (librqbit actual version on crates.io).
+# `http-api` gives librqbit's built-in localhost streaming endpoint
+# (`GET /torrents/{id}/stream/{file_id}`, Range-aware) which auto-prioritizes
+# pieces from the player's read position — the correct way to seek a
+# partially-downloaded file. It runs on loopback (not a server we operate).
+librqbit = { version = "8", default-features = false, features = ["default-tls", "http-api", "tracing-subscriber-utils"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -50,6 +54,40 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 hex = "0.4"
 urlencoding = "2.1.3"
+
+# Crypto + RNG for serverless share-code generation (engine::share_code)
+sha1 = "0.10"
+sha2 = "0.10"
+hkdf = "0.12"
+aes-gcm = "0.10"
+rand = "0.8"
+
+# P2P stack — libp2p for signaling + NAT traversal (no central server).
+# See plans/ok-after-analysing-how-fuzzy-shell.md for the architecture.
+libp2p = { version = "0.54", features = [
+    "tokio",
+    "macros",
+    "noise",
+    "quic",
+    "yamux",
+    "tcp",
+    "dns",
+    "kad",
+    "gossipsub",
+    "identify",
+    "mdns",
+    "autonat",
+    "relay",
+    "dcutr",
+    "ping",
+    "ed25519",
+    "request-response",
+    "cbor",
+] }
+
+# Embedded mpv player for VLC-class playback (handles MKV/HEVC/AV1/AVI/MOV/...).
+# Bundles libmpv-2.dll via `npx tauri-plugin-libmpv-api setup-lib`.
+tauri-plugin-libmpv = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"

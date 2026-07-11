@@ -12,6 +12,9 @@ apps/desktop/src-tauri/WixTools/
 apps/desktop/src-tauri/resources/cloudflared
 apps/desktop/src-tauri/resources/cloudflared.exe
 
+# libmpv runtime DLLs — large binaries fetched by `npx tauri-plugin-libmpv-api setup-lib`
+apps/desktop/src-tauri/lib/
+
 # Environment
 .env
 .env.*
