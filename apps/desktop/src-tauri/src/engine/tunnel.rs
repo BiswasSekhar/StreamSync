@@ -23,26 +23,6 @@ pub fn get_cloudflared_path() -> anyhow::Result<std::path::PathBuf> {
     Ok(p)
 }
 
-pub fn kill_existing_cloudflared() {
-    #[cfg(target_os = "windows")]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "cloudflared.exe"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = std::process::Command::new("pkill")
-            .arg("cloudflared")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    }
-}
-
 pub async fn stop_tunnel(state: &AppState) {
     {
         let mut child_lock = state.tunnel_child.lock().await;
@@ -89,9 +69,20 @@ pub async fn start_tunnel(port: u16) -> anyhow::Result<TunnelProcess> {
         .take()
         .ok_or_else(|| anyhow!("Failed to capture cloudflared stderr"))?;
 
-    let public_url = extract_tunnel_url(stderr).await?;
+    let public_url = match extract_tunnel_url(stderr).await {
+        Ok(url) => url,
+        Err(error) => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            return Err(error);
+        }
+    };
     tracing::info!("cloudflared tunnel URL: {}", public_url);
-    wait_for_tunnel_ready(&public_url).await?;
+    if let Err(error) = wait_for_tunnel_ready(&public_url).await {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(error);
+    }
     tracing::info!("cloudflared tunnel is reachable at {}/ws", public_url.trim_end_matches('/'));
     Ok(TunnelProcess { child, public_url })
 }

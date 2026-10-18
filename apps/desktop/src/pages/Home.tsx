@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { useSessionStore } from "../store/session";
 import type { TorrentProgressInfo, TorrentVideoFile } from "../store/session";
-import type { SignallingMode } from "@streamsync/shared";
+import { parseShareCode, type SignallingMode } from "@streamsync/shared";
 import { Settings } from "./Settings";
 
 type HomeMode = "landing" | "host" | "join";
@@ -49,6 +49,10 @@ export function Home() {
 
   // Tauri native drag-drop listener (HTML5 ondrop does NOT give file paths in Tauri)
   useEffect(() => {
+    // The frontend is also served by Vite for browser QA. Tauri event
+    // listeners are only available inside the native shell.
+    if (!("__TAURI_INTERNALS__" in window)) return;
+
     let unlisten: (() => void) | undefined;
 
     listen<{ paths: string[] }>("tauri://drag-drop", (event) => {
@@ -65,19 +69,21 @@ export function Home() {
         }
       }
       setDragging(false);
-    }).then((fn) => { unlisten = fn; });
+    }).then((fn) => { unlisten = fn; }).catch(() => {});
 
     listen("tauri://drag-over", () => setDragging(true))
       .then((fn) => {
         const prev = unlisten;
         unlisten = () => { prev?.(); fn(); };
-      });
+      })
+      .catch(() => {});
 
     listen("tauri://drag-leave", () => setDragging(false))
       .then((fn) => {
         const prev = unlisten;
         unlisten = () => { prev?.(); fn(); };
-      });
+      })
+      .catch(() => {});
 
     return () => { unlisten?.(); };
   }, [mode]);
@@ -137,16 +143,15 @@ export function Home() {
     if (/^https?:\/\//i.test(raw)) {
       joinRoom(raw);
     } else {
-      const normalized = raw
-        .replace(/^tracker:\/\//i, "")
-        .replace(/[^a-fA-F0-9]/g, "")
-        .toLowerCase();
+      const normalized = raw.replace(/^tracker:\/\//i, "").trim();
+      const canonical = parseShareCode(normalized);
+      const legacyInfoHash = normalized.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
 
-      if (normalized.length !== 40) {
-        showToast("Enter a valid room URL or 40-character share code", "warning");
+      if (!canonical && legacyInfoHash.length !== 40) {
+        showToast("Enter a valid room URL or 16-character share code", "warning");
         return;
       }
-      joinRoom(`tracker://${normalized}`);
+      joinRoom(canonical ?? `tracker://${legacyInfoHash}`);
     }
 
     // Persist display name for receiver
@@ -232,6 +237,7 @@ export function Home() {
                   encodeProgress: null, encodeComplete: false,
                   roomUrl: null, sessionId: null,
                   shareCode: null,
+                  trackerInfoHash: null,
                 });
               }}
               className="btn-ghost"
@@ -292,10 +298,10 @@ export function Home() {
               </div>
 
               <p className="landing-footer">
-                Your file never leaves your machine. Signalling is coordinated via your private cloudflared tunnel.
+                Your file streams directly from the host. Guests connect peer-to-peer, with a tunnel used only when needed.
                 <br />
                 <span className="landing-footer-sub">
-                  Powered by WebRTC, WebTorrent, and Cloudflare Tunnel.
+                  Powered by WebRTC and WebTorrent — no StreamSync server.
                 </span>
               </p>
             </>
@@ -323,7 +329,7 @@ export function Home() {
                 />
                 <input
                   type="text"
-                  placeholder="https://...trycloudflare.com/?room=ABCDEFGH or a1b2-c3d4-..."
+                  placeholder="https://...trycloudflare.com/?room=ABCD-EFGH-JKLM-NPQR or ABCD-EFGH-JKLM-NPQR"
                   value={joinUrl}
                   onChange={e => setJoinUrl(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && handleJoin()}
@@ -430,6 +436,7 @@ export function Home() {
                     encodeProgress: null, encodeComplete: false,
                     roomUrl: null, sessionId: null,
                     shareCode: null,
+                    trackerInfoHash: null,
                   })}
                 />
               ) : probeResult ? (
@@ -455,8 +462,9 @@ export function Home() {
                       onClick={() => useSessionStore.setState({
                         filePath: null, probeResult: null,
                         encodeProgress: null, encodeComplete: false,
-                        roomUrl: null, sessionId: null,
+                          roomUrl: null, sessionId: null,
                           shareCode: null,
+                          trackerInfoHash: null,
                       })}
                       className="btn-ghost"
                     >

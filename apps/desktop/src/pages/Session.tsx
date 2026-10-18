@@ -13,7 +13,7 @@ interface FloatPos { x: number; y: number; }
 interface CamTile { id: string; label: string; stream: MediaStream | null; isLocal: boolean; }
 
 export function Session() {
-  const { peers, roomUrl, shareCode, trackerUrls, closeRoom, leaveSession, sessionId, showToast, messages, displayName, roomCodeVisible } = useSessionStore();
+  const { peers, roomUrl, shareCode, trackerInfoHash, signallingMode, trackerUrls, closeRoom, leaveSession, sessionId, showToast, messages, displayName, roomCodeVisible } = useSessionStore();
   const hostRtcRef = useRef<HostWebRTC | null>(null);
   // Pending join requests (peerId → displayName)
   const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
@@ -124,7 +124,10 @@ export function Session() {
       stableOnPlaybackControl,
     );
     hostRtcRef.current = rtc;
-    rtc.connect(shareCode ?? sessionId, { trackerUrls });
+    rtc.connect(shareCode ?? sessionId, {
+      trackerInfoHash: signallingMode === "tracker" ? trackerInfoHash ?? undefined : undefined,
+      trackerUrls,
+    });
 
     // If encode is already complete (effect re-runs), inform the new RTC instance immediately
     const store = useSessionStore.getState();
@@ -143,7 +146,7 @@ export function Session() {
     }
 
     return () => { rtc.close(); hostRtcRef.current = null; };
-  }, [sessionId, shareCode, trackerUrls, handleRemoteStream, stableOnPlaybackControl, displayName, addToast, showToast]);
+  }, [sessionId, shareCode, trackerInfoHash, signallingMode, trackerUrls, handleRemoteStream, stableOnPlaybackControl, displayName, addToast, showToast]);
 
   const encodeComplete = useSessionStore(s => s.encodeComplete);
   const probeResult = useSessionStore(s => s.probeResult);

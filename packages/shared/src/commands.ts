@@ -20,6 +20,7 @@ export type SignallingMode = "tracker" | "tunnel";
 export interface CreateRoomResponse {
   sessionId: string;
   shareCode: string;
+  trackerInfoHash: string;
   fallbackUrl: string | null;
   mode: SignallingMode;
   trackerUrls: string[];

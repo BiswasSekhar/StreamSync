@@ -11,6 +11,7 @@ const SIGNALLING_PORT: u16 = 8787;
 pub struct CreateRoomResponse {
     pub session_id: String,
     pub share_code: String,
+    pub tracker_info_hash: String,
     pub fallback_url: Option<String>,
     pub mode: String,
     pub tracker_urls: Vec<String>,
@@ -28,36 +29,37 @@ pub async fn create_room(
         .unwrap_or(SignallingMode::Tracker);
 
     crate::engine::tunnel::stop_tunnel(&state).await;
-    crate::engine::tunnel::kill_existing_cloudflared();
 
-    let (session_id, share_code, room_url, fallback_url, tracker_urls) = match selected_mode {
+    // The Crockford code is the only user-facing room identity. The tracker
+    // hash is derived from it and remains an implementation detail used by
+    // the WebTorrent signalling adapter.
+    let share_code = crate::engine::share_code::generate_share_code();
+    let info_hash = crate::engine::share_code::derive_info_hash(&share_code)
+        .map_err(|e| format!("derive tracker identity: {e}"))?;
+    let session_id = tracker_signal::make_session_id_from_info_hash(&info_hash);
+
+    let (room_url, fallback_url, tracker_urls) = match selected_mode {
         SignallingMode::Tracker => {
-            let info_hash = tracker_signal::generate_info_hash_hex();
-            let session_id = tracker_signal::make_session_id_from_info_hash(&info_hash);
-            let share_code = tracker_signal::format_share_code(&info_hash);
             let room_url = format!("tracker://{}", info_hash);
             let trackers = tracker_signal::DEFAULT_TRACKERS
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>();
-            (session_id, share_code, room_url, None, trackers)
+            (room_url, None, trackers)
         }
         SignallingMode::Tunnel => {
-            let session_id = uuid::Uuid::new_v4()
-                .to_string()
-                .split('-')
-                .next()
-                .unwrap()
-                .to_uppercase();
-
             let tunnel = crate::engine::tunnel::start_tunnel(SIGNALLING_PORT)
                 .await
                 .map_err(|e| e.to_string())?;
             let public_url = tunnel.public_url.clone();
-            let room_url = format!("{}/?room={}", public_url, session_id);
+            let room_url = format!(
+                "{}/?room={}",
+                public_url,
+                urlencoding::encode(&share_code)
+            );
             crate::engine::tunnel::set_running_tunnel(&state, tunnel).await;
 
-            (session_id.clone(), session_id, room_url.clone(), Some(room_url), vec![])
+            (room_url.clone(), Some(room_url), vec![])
         }
     };
 
@@ -78,6 +80,7 @@ pub async fn create_room(
     Ok(CreateRoomResponse {
         session_id,
         share_code,
+        tracker_info_hash: info_hash,
         fallback_url,
         mode: selected_mode.as_str().to_string(),
         tracker_urls,
@@ -93,6 +96,15 @@ pub async fn close_room(
     let _ = state.room_close_tx.send(String::new());
 
     crate::engine::tunnel::stop_tunnel(&state).await;
+
+    let p2p_handle = {
+        let mut guard = state.p2p.lock().await;
+        guard.take()
+    };
+    if let Some(handle) = p2p_handle {
+        handle.shutdown().await;
+    }
+
     let mut torrent_stream = state.torrent_stream.lock().await;
     *torrent_stream = None;
     let mut active_stream = state.active_stream.lock().await;

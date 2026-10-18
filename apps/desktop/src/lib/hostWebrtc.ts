@@ -36,9 +36,11 @@ interface PeerChannels {
   // ICE batching per-peer
   iceBatchBuffer: RTCIceCandidateInit[];
   iceBatchTimer: ReturnType<typeof setTimeout> | null;
+  mediaBytesInFlight: number;
 }
 
 const MAX_PEERS = MAX_VIEWERS_PER_ROOM;
+const MAX_MEDIA_BYTES_IN_FLIGHT = 8 * 1024 * 1024;
 const ICE_BATCH_DELAY = 300; // ms
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const PEER_STALE_TIMEOUT_MS = 60_000;
@@ -71,8 +73,8 @@ export class HostWebRTC {
     private onPlaybackControl: (action: 'play' | 'pause' | 'seek', position: number, fromPeerId: string) => void = () => {},
   ) {}
 
-  connect(roomId: string, options?: { trackerUrls?: string[] }) {
-    const trackerInfoHash = normalizeTrackerInfoHash(roomId);
+  connect(roomId: string, options?: { trackerInfoHash?: string; trackerUrls?: string[] }) {
+    const trackerInfoHash = options?.trackerInfoHash ?? normalizeTrackerInfoHash(roomId);
     if (trackerInfoHash) {
       this.connectViaTracker(trackerInfoHash, options?.trackerUrls);
       return;
@@ -400,6 +402,7 @@ export class HostWebRTC {
       displayName,
       iceBatchBuffer: [],
       iceBatchTimer: null,
+      mediaBytesInFlight: 0,
     };
     this.peers.set(peerId, peerChannels);
     this.markPeerAlive(peerId);
@@ -442,6 +445,18 @@ export class HostWebRTC {
           return;
         }
         const { start, end } = parsed;
+        const requestedBytes = end - start + 1;
+        if (!Number.isSafeInteger(requestedBytes)
+          || peerChannels.mediaBytesInFlight + requestedBytes > MAX_MEDIA_BYTES_IN_FLIGHT) {
+          mediaDc.send(JSON.stringify({
+            type: 'WEBRTC_CHUNK_ERROR',
+            reqId: req.reqId,
+            chunkId: req.chunkId,
+            reason: 'in-flight-budget',
+          }));
+          return;
+        }
+        peerChannels.mediaBytesInFlight += requestedBytes;
 
         // Read bytes from the host's local video / torrent stream via
         // the Tauri IPC bridge — no HTTP, no localhost, works in pure
@@ -451,6 +466,7 @@ export class HostWebRTC {
           const result = await invoke<ArrayBuffer>('read_video_chunk', { start, end });
           arrayBuffer = result instanceof ArrayBuffer ? result : new Uint8Array(result as ArrayLike<number>).buffer;
         } catch (readErr) {
+          peerChannels.mediaBytesInFlight = Math.max(0, peerChannels.mediaBytesInFlight - requestedBytes);
           console.error('[HostWebRTC] read_video_chunk failed', readErr);
           mediaDc.send(JSON.stringify({
             type: 'WEBRTC_CHUNK_ERROR',
@@ -460,6 +476,7 @@ export class HostWebRTC {
           }));
           return;
         }
+        peerChannels.mediaBytesInFlight = Math.max(0, peerChannels.mediaBytesInFlight - requestedBytes);
 
         const hasChunkId = Number.isInteger(req.chunkId) && req.chunkId >= 0;
         const actualEnd = start + arrayBuffer.byteLength - 1;
@@ -681,15 +698,16 @@ function parseRangeHeader(header: string, totalSize: number): { start: number; e
   const spec = header.startsWith('bytes=') ? header.slice('bytes='.length) : header;
   const [rawStart, rawEnd] = spec.split('-', 2);
   const start = Number(rawStart);
-  if (!Number.isFinite(start) || start < 0) return null;
+  if (!Number.isSafeInteger(start) || start < 0) return null;
   let end: number;
   if (rawEnd && rawEnd.trim().length > 0) {
     const parsed = Number(rawEnd);
-    if (!Number.isFinite(parsed) || parsed < start) return null;
+    if (!Number.isSafeInteger(parsed) || parsed < start) return null;
     end = parsed;
   } else {
     end = start + DEFAULT_CHUNK_BYTES - 1;
   }
+  if (!Number.isSafeInteger(end)) return null;
   if (totalSize > 0) {
     end = Math.min(end, totalSize - 1);
   }

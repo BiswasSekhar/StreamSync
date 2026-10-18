@@ -27,7 +27,7 @@
         "enable": true,
         "scope": ["**"]
       },
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' blob: data:; media-src blob: 'self' asset: http://asset.localhost http://localhost:* http://127.0.0.1:* https:; connect-src 'self' wss: https: ws: http:; img-src 'self' data: blob: asset: http://asset.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+    "csp": "default-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; media-src 'self' blob: asset: http://asset.localhost http://localhost:* http://127.0.0.1:*; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* wss://tracker.files.fm:7073 wss://tracker.openwebtorrent.com wss://tracker.webtorrent.dev https://*.trycloudflare.com wss://*.trycloudflare.com; img-src 'self' data: blob: asset: http://asset.localhost"
     }
   },
   "bundle": {

@@ -19,8 +19,18 @@ export interface VideoReadyInfo {
 export interface ChunkMeta {
   type: "WEBRTC_CHUNK_RESPONSE";
   reqId: string;
+  chunkId?: number;
   size: number;
   contentRange: string;
+}
+
+const CHUNK_ENVELOPE_MAGIC = 0x53534348;
+
+function decodeChunkEnvelope(data: ArrayBuffer): { chunkId: number; payload: ArrayBuffer } | null {
+  if (data.byteLength < 8) return null;
+  const view = new DataView(data);
+  if (view.getUint32(0) !== CHUNK_ENVELOPE_MAGIC) return null;
+  return { chunkId: view.getUint32(4), payload: data.slice(8) };
 }
 
 export class ReceiverWebRTC {
@@ -31,7 +41,9 @@ export class ReceiverWebRTC {
   private chatDc: RTCDataChannel | null = null;
   private syncDcRef: RTCDataChannel | null = null;
   private mediaDcRef: RTCDataChannel | null = null;
-  private currentMediaMeta: ChunkMeta | null = null;
+  private legacyMediaMeta: ChunkMeta | null = null;
+  private mediaMetaByChunkId = new Map<number, ChunkMeta>();
+  private nextChunkId = 0;
   private initialOfferResolved = false;
   private hostPeerId: string | null = null;
   private receivedStreamIds = new Set<string>();
@@ -110,8 +122,15 @@ export class ReceiverWebRTC {
 
   requestChunk(start: number, end: number, reqId: string): void {
     if (this.mediaDcRef?.readyState === "open") {
+      this.nextChunkId = (this.nextChunkId + 1) >>> 0;
       this.mediaDcRef.send(
-        JSON.stringify({ type: "WEBRTC_CHUNK_REQUEST", reqId, range: `bytes=${start}-${end}` })
+        JSON.stringify({
+          type: "WEBRTC_CHUNK_REQUEST",
+          reqId,
+          chunkId: this.nextChunkId,
+          range: `bytes=${start}-${end}`,
+          encoding: "chunk-id-prefix-v1",
+        })
       );
     }
   }
@@ -143,6 +162,8 @@ export class ReceiverWebRTC {
     this.ws?.close();
     this.ws = null;
     this.pc?.close();
+    this.legacyMediaMeta = null;
+    this.mediaMetaByChunkId.clear();
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
@@ -317,13 +338,26 @@ export class ReceiverWebRTC {
             try {
               const meta = JSON.parse(ev.data);
               if (meta.type === "WEBRTC_CHUNK_RESPONSE") {
-                this.currentMediaMeta = meta as ChunkMeta;
+                const parsed = meta as ChunkMeta;
+                if (Number.isInteger(parsed.chunkId)) {
+                  this.mediaMetaByChunkId.set(parsed.chunkId!, parsed);
+                } else {
+                  this.legacyMediaMeta = parsed;
+                }
               }
             } catch {}
           } else if (ev.data instanceof ArrayBuffer) {
-            if (this.currentMediaMeta) {
-              this.onMediaChunk(ev.data, this.currentMediaMeta);
-              this.currentMediaMeta = null;
+            const envelope = decodeChunkEnvelope(ev.data);
+            if (envelope) {
+              const meta = this.mediaMetaByChunkId.get(envelope.chunkId);
+              if (meta) {
+                this.mediaMetaByChunkId.delete(envelope.chunkId);
+                this.onMediaChunk(envelope.payload, meta);
+              }
+            } else if (this.legacyMediaMeta) {
+              const meta = this.legacyMediaMeta;
+              this.legacyMediaMeta = null;
+              this.onMediaChunk(ev.data, meta);
             }
           }
         };

@@ -55,14 +55,16 @@ pub fn resolve_binary(name: &str) -> String {
 
 /// Helper to create a new async Command while ensuring console windows are hidden on Windows
 fn get_command(binary: &str) -> tokio::process::Command {
-    let cmd = tokio::process::Command::new(binary);
     #[cfg(target_os = "windows")]
     {
-        let mut cmd = cmd;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        return cmd;
+        let mut command = tokio::process::Command::new(binary);
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command
     }
-    cmd
+    #[cfg(not(target_os = "windows"))]
+    {
+        tokio::process::Command::new(binary)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

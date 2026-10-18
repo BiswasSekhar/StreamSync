@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "nostr-tools": "^2.23.3",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
     "webtorrent": "^2.4.0",

@@ -12,6 +12,8 @@ import {
   type WebRtcChunkErrorMessage,
   type WebRtcChunkRequestMessage,
   type WebRtcChunkResponseMetaMessage,
+  deriveInfoHash,
+  parseShareCode,
 } from "@streamsync/shared";
 import { TrackerSignallingMesh, normalizeTrackerInfoHash } from "./trackerSignalling";
 
@@ -114,7 +116,22 @@ export class JoinWebRTC {
       return;
     }
 
-    const url = new URL(fullUrl);
+    const shareCode = parseShareCode(fullUrl.replace(/^tracker:\/\//i, ""));
+    if (shareCode) {
+      const derivedInfoHash = await deriveInfoHash(shareCode);
+      if (!this.closed) {
+        this.connectViaTracker(derivedInfoHash, options?.trackerUrls);
+      }
+      return;
+    }
+
+    let url: URL;
+    try {
+      url = new URL(fullUrl);
+    } catch {
+      this.onJoinDenied("Invalid room URL or share code.");
+      return;
+    }
     const wsBase = fullUrl.split("?")[0];
     const wsUrl = wsBase
       .replace(/^https:\/\//i, "wss://")

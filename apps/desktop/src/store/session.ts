@@ -186,6 +186,7 @@ interface SessionStore {
   sessionId: string | null;
   signallingMode: SignallingMode;
   shareCode: string | null;
+  trackerInfoHash: string | null;
   trackerUrls: string[];
   roomUrl: string | null;
   magnetLink: string | null;
@@ -257,6 +258,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   sessionId: null,
   signallingMode: "tracker",
   shareCode: null,
+  trackerInfoHash: null,
   trackerUrls: [],
   roomUrl: null,
   magnetLink: null,
@@ -409,6 +411,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         sessionId: response.sessionId,
         signallingMode: response.mode,
         shareCode: response.shareCode,
+        trackerInfoHash: response.trackerInfoHash ?? null,
         trackerUrls: response.trackerUrls ?? [],
         roomUrl: response.fallbackUrl,
         tunnelConnected: Boolean(response.fallbackUrl),
@@ -458,6 +461,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       roomUrl: null,
       sessionId: null,
       shareCode: null,
+      trackerInfoHash: null,
       trackerUrls: [],
       peers: [],
       messages: [],
@@ -511,6 +515,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       view: "home",
       sessionId: null,
       shareCode: null,
+      trackerInfoHash: null,
       trackerUrls: [],
       roomUrl: null,
       magnetLink: null,

@@ -39,9 +39,6 @@ pub fn run() {
                 tracing::info!("Resource dir: {}", resource_dir.display());
             }
 
-            // Avoid stale background tunnel processes after crashes.
-            engine::tunnel::kill_existing_cloudflared();
-
             let cf = app.state::<CurrentFilePath>().inner().clone();
 
             // Start signalling server on background thread
